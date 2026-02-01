@@ -13,9 +13,9 @@ A modern Progressive Web Application for real-time school bus tracking with role
 ### ✨ Completed Features
 
 #### 🔐 Authentication System
-- ✅ Unified login page (`/login`)
-- ✅ Role-based access (Admin, Parent, Driver)
-- ✅ JWT token authentication
+- ✅ **Admin-only Login** (`/admin/login`)
+- ✅ ERP Integration for Parents (Magic Link)
+- ✅ JWT token authentication (for Admins)
 - ✅ Firebase Authentication integration
 - ✅ Session management
 
@@ -32,16 +32,14 @@ A modern Progressive Web Application for real-time school bus tracking with role
 - ✅ Camera feed integration (UI ready)
 
 #### 👨‍👩‍👧 Parent Dashboard (`/parent/dashboard`)
+- ✅ **Public Access via ERP Link** (No login required)
+- ✅ Auto-load student & bus details from URL
 - ✅ View assigned bus location
 - ✅ Real-time GPS updates via WebSocket
-- ✅ Bus details display (plate number, capacity, etc.)
-- ✅ Route information
-- ✅ Connection status indicator
 - ✅ Mobile-responsive design
 
-#### 🚗 Driver Dashboard (`/driver/dashboard`)
-- ✅ Basic template created
-- ⚠️ Needs implementation based on requirements
+#### 🚗 Driver Dashboard
+~ Removed in this build. Driver-facing UI routes have been deleted.
 
 #### 🌐 Real-time Updates
 - ✅ **WebSocket implementation** (replaces HTTP polling)
@@ -64,6 +62,7 @@ A modern Progressive Web Application for real-time school bus tracking with role
 - ✅ Edit bus details
 - ✅ Auto-sync with Fleet API
 - ✅ Device ID as primary identifier
+- ✅ **ERP Bus Number Mapping** (Link external IDs to GPS devices)
 - ⚠️ Delete functionality not implemented
 
 #### 📱 PWA Features
@@ -77,28 +76,15 @@ A modern Progressive Web Application for real-time school bus tracking with role
 
 ## ⚠️ Critical Issues to Fix Before Client Handover
 
-### 🔴 SECURITY - MUST FIX IMMEDIATELY
-
+### 🟢 SECURITY - STATUS UPDATE
 1. **Exposed Firebase Admin SDK Key**
-   - File: `bus-tracking-7dcff-firebase-adminsdk-fbsvc-a118dbc578.json`
-   - Contains private keys
-   - **Action**: Remove from repository, store securely on server
-   - Command:
-     ```bash
-     git rm --cached bus-tracking-7dcff-firebase-adminsdk-fbsvc-a118dbc578.json
-     ```
+   - ✅ **FIXED**: File removed from repository. Backend now uses `FIREBASE_SERVICE_ACCOUNT_JSON` environment variable.
 
 2. **SSL Certificates in Repository**
-   - Files: `*.crt`, `*.pem`
-   - **Action**: Remove and add to `.gitignore` (already updated)
-   - Command:
-     ```bash
-     git rm --cached *.crt *.pem
-     ```
+   - ✅ **FIXED**: Removed `*.crt` and `*.pem` files and added to `.gitignore`.
 
 3. **JWT Secret**
-   - **Action**: Generate new secret for production
-   - Update in `backend/.env`
+   - ⚠️ **ACTION REQUIRED**: Ensure you generate a new secret for production in your `.env` file.
 
 ---
 

@@ -63,6 +63,14 @@ NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
 
 # Fleet API Configuration
 NEXT_PUBLIC_FLEET_API_BASE_URL=https://fleet.lagaam.in
+
+# External ERP Authentication (bypass in-app login)
+# When true, the app will not prompt for login and will rely on ERP
+# You can pass role via URL (?role=admin|parent|student) or set localStorage 'userRole'
+NEXT_PUBLIC_EXTERNAL_AUTH_ENABLED=true
+# Optional: if ERP forwards identity via headers through reverse proxy
+NEXT_PUBLIC_ERP_USER_ID_HEADER=x-erp-user-id
+NEXT_PUBLIC_ERP_USER_ROLE_HEADER=x-erp-user-role
 ```
 
 ### 2. Backend Environment Variables
@@ -319,16 +327,17 @@ The system will auto-create bus entries when devices are detected from Fleet API
    - Bus details display
    - Route information
 
-4. **Driver Dashboard** (Basic)
-   - Available at `/driver/dashboard`
+4. ~~Driver Dashboard (Basic)~~
+   - Removed from this build; driver UI routes are no longer present.
    - Needs customization based on requirements
 
 5. **Authentication System**
-   - Unified login page
+   - Unified login page (can be bypassed)
    - Role-based access (Admin, Parent, Driver)
    - JWT token authentication with backend
-   - Firebase authentication
+   - Firebase authentication (anonymous session by default)
    - Session management
+   - External ERP auth mode to avoid double login (`NEXT_PUBLIC_EXTERNAL_AUTH_ENABLED=true`)
 
 6. **Bus Management**
    - Auto-add buses from Fleet API
@@ -364,7 +373,8 @@ The system will auto-create bus entries when devices are detected from Fleet API
    - Real-time updates only when app is open
    - **Future Enhancement**: Implement Firebase Cloud Messaging
 
-5. **Driver Dashboard Incomplete**
+5. ~~Driver Dashboard Incomplete~~
+   - Removed; focus is on parent and admin dashboards.
    - Basic template exists
    - Needs implementation based on requirements
 
@@ -498,7 +508,7 @@ The system will auto-create bus entries when devices are detected from Fleet API
 1. Token refresh mechanism
 2. Delete bus functionality
 3. Replace alerts with toast notifications
-4. Driver dashboard implementation
+4. Driver dashboard implementation (removed in this build)
 5. Attendance tracking system
 
 ### Medium Priority

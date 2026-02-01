@@ -1,21 +1,34 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useAuth } from "@/contexts/auth-context"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Bus, Clock, LogOut, MapPin, Navigation, RefreshCw, Users } from "lucide-react"
-import { auth } from "@/lib/firebase"
-import { doc, getDoc } from "firebase/firestore"
-import { config } from "@/lib/config"
+import {
+  Bus,
+  Clock,
+  MapPin,
+  Navigation,
+  RefreshCw,
+  ArrowLeft,
+  Wifi,
+  WifiOff,
+  Route,
+  User,
+  Compass,
+  Phone,
+  Mail,
+  Info,
+} from "lucide-react"
+import { Timestamp } from "firebase/firestore"
 import { fetchBackendAPI } from "@/lib/backend-auth"
 import { FirestoreService, type StudentProfile } from "@/lib/firestore"
-import type { DirectionsResult, LatLng } from "@/lib/google-maps"
+import type { DirectionsResult } from "@/lib/google-maps"
 import { GoogleMapsService } from "@/lib/google-maps"
 import { GoogleMap } from "@/components/google-map"
+import haversine from 'haversine-distance'
 
 interface ParentLocation {
   latitude: number
@@ -33,25 +46,27 @@ interface ParentBusStatus {
 }
 
 export default function ParentDashboard() {
-  const { user, userRole, logout } = useAuth()
+  const { user } = useAuth()
   const router = useRouter()
   const [profile, setProfile] = useState<StudentProfile | null>(null)
   const [busStatus, setBusStatus] = useState<ParentBusStatus | null>(null)
-  const [busData, setBusData] = useState<any>(null) // Bus data from Firebase
+  const [busData, setBusData] = useState<any>(null)
   const [parentLocation, setParentLocation] = useState<ParentLocation | null>(null)
   const [directions, setDirections] = useState<DirectionsResult | null>(null)
+  const [locationName, setLocationName] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
-  const [wsConnected, setWsConnected] = useState(false) // WebSocket connection status
 
-  // Get parent's current location
+  // Track last route calculation to throttle API calls
+  const lastCalcRef = useRef<{ lat: number; lng: number; time: number } | null>(null)
+  const [wsConnected, setWsConnected] = useState(false)
+
   const getCurrentLocation = useCallback(() => {
     if (!navigator.geolocation) {
       setError("Geolocation is not supported by this browser")
       return
     }
-
     navigator.geolocation.getCurrentPosition(
       (position) => {
         setParentLocation({
@@ -61,45 +76,59 @@ export default function ParentDashboard() {
         })
       },
       (err) => {
-        // The GeolocationPositionError object doesn't serialize well.
-        // Log its properties individually for a clear error message.
-        console.error(`Error getting location: Code ${err.code} - ${err.message}`)
-        let friendlyMessage = "Unable to get your location. "
-        if (err.code === 1) {
-          friendlyMessage += "Please enable location permissions in your browser settings."
-        } else if (err.code === 2) {
-          friendlyMessage += "Location information is currently unavailable."
-        }
-
-        setError(friendlyMessage)
+        console.warn(`High accuracy location failed (${err.message}), retrying with low accuracy...`)
+        // Retry with low accuracy
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            setParentLocation({
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              accuracy: position.coords.accuracy,
+            })
+          },
+          (retryErr) => {
+            console.error(`Error getting location: Code ${retryErr.code} - ${retryErr.message}`)
+            if (retryErr.code === 1) {
+              setError("Please enable location permissions")
+            }
+          },
+          { enableHighAccuracy: false, timeout: 20000, maximumAge: 60000 }
+        )
       },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
     )
   }, [])
 
-  // Fetch bus status
   const fetchBusStatus = useCallback(async () => {
     if (!profile?.assignedBusId) return
-
     try {
-      // Fetch bus data from Firebase
       if (user) {
-        const firestoreService = new FirestoreService(user.uid);
-        const allBuses = await firestoreService.getAllBuses();
-        const firebaseBus = allBuses.find(b => b.busId === profile.assignedBusId);
-        if (firebaseBus) {
-          setBusData(firebaseBus);
-        }
+        const firestoreService = new FirestoreService(user.uid)
+        const allBuses = await firestoreService.getAllBuses()
+        const firebaseBus = allBuses.find((b) => b.busId === profile.assignedBusId)
+        if (firebaseBus) setBusData(firebaseBus)
       }
-
-      // Fetch from FastAPI backend with authentication
       const response = await fetchBackendAPI(`/api/liveplate?device_id=${encodeURIComponent(profile.assignedBusId)}`)
-      const data = await response.json()
-
+      let data = await response.json()
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to fetch bus status")
+        const allRes = await fetchBackendAPI(`/api/liveplate_all`)
+        const allData = await allRes.json()
+        const match = Array.isArray(allData)
+          ? allData.find(
+            (item: any) =>
+              item.device_id === profile.assignedBusId ||
+              item.device_id === profile.assignedBusId ||
+              item.plate_number === profile.assignedBusId ||
+              (item.device_info && item.device_info.erpId === profile.assignedBusId) ||
+              // Also check if erpId matches loosely (string/number)
+              (item.device_info && String(item.device_info.erpId) === String(profile.assignedBusId)) ||
+              // Fuzzy match digits: "BusNo.6" matches "6"
+              (item.plate_number && String(item.plate_number).replace(/\D/g, '') === String(profile.assignedBusId).replace(/\D/g, ''))
+          )
+          : null
+        if (!match) throw new Error(data?.error || "Failed to fetch bus status")
+        data = match
       }
-
       const gps = data?.gps || {}
       const status: ParentBusStatus = {
         nm: data?.plate_number || data?.device_name || profile.assignedBusId,
@@ -107,18 +136,39 @@ export default function ParentDashboard() {
         mlng: Number(gps?.longitude || 0),
         dt: gps?.last_update ? new Date(gps.last_update * 1000).toISOString() : new Date().toISOString(),
         online: !!gps?.online,
+        s1: data?.s1,
       }
       setBusStatus(status)
       setLastUpdate(new Date())
     } catch (err) {
       console.error("Error fetching bus status:", err)
-      setError("Unable to fetch bus location")
     }
   }, [profile?.assignedBusId, user])
 
-  // Calculate distance and ETA
   const calculateDirections = useCallback(async () => {
     if (!busStatus || !parentLocation) return
+
+    // Throttling: Check distance and time
+    const now = Date.now()
+    const currentLoc = { lat: busStatus.mlat, lng: busStatus.mlng }
+
+    // Initial calc or forced update conditions
+    let shouldUpdate = false
+
+    if (!lastCalcRef.current) {
+      shouldUpdate = true
+    } else {
+      const dist = haversine(
+        { lat: lastCalcRef.current.lat, lng: lastCalcRef.current.lng },
+        { lat: currentLoc.lat, lng: currentLoc.lng }
+      )
+      // Update if moved > 50 meters OR > 45 seconds passed
+      if (dist > 50 || (now - lastCalcRef.current.time > 45000)) {
+        shouldUpdate = true
+      }
+    }
+
+    if (!shouldUpdate) return
 
     try {
       const maps = new GoogleMapsService()
@@ -127,80 +177,105 @@ export default function ParentDashboard() {
         { lat: parentLocation.latitude, lng: parentLocation.longitude }
       )
       setDirections(data)
+      lastCalcRef.current = { ...currentLoc, time: now }
+      console.log('🔄 Travel Info Updated (Live)')
     } catch (err) {
       console.error("Error calculating directions:", err)
     }
   }, [busStatus, parentLocation])
 
-  // Load student profile
   useEffect(() => {
-    if (!user || (userRole !== "student" && userRole !== "parent")) {
-      router.push("/")
-      return
-    }
-
+    // If we have URL params, we don't strictly need 'user'
     const loadProfile = async () => {
       try {
-        const firestoreService = new FirestoreService(user.uid)
-        const studentProfile = await firestoreService.getStudentProfile()
+        const url = typeof window !== "undefined" ? new URL(window.location.href) : null
+        const busId = url?.searchParams.get("busId")
+        const studentName = url?.searchParams.get("studentName")
 
-        if (studentProfile) {
-          setProfile(studentProfile)
+        if (busId) {
+          setProfile({
+            studentId: "external",
+            username: "external",
+            name: studentName ? decodeURIComponent(studentName) : "Student",
+            assignedBusId: busId,
+            createdAt: Timestamp.now(),
+          })
+          setLoading(false)
+        } else if (user) {
+          const firestoreService = new FirestoreService(user.uid)
+          const studentProfile = await firestoreService.getStudentProfile()
+          if (studentProfile) setProfile(studentProfile)
+          setLoading(false)
+        } else {
+          // Guest mode / Public link
+          setLoading(false)
         }
       } catch (err) {
         console.error("Error loading profile:", err)
         setError("Unable to load profile")
-      } finally {
         setLoading(false)
       }
     }
-
     loadProfile()
     getCurrentLocation()
-  }, [user, userRole, router, getCurrentLocation])
+  }, [user, router, getCurrentLocation])
 
-  // Calculate directions when bus or student location changes
   useEffect(() => {
     calculateDirections()
   }, [calculateDirections])
 
-  // WebSocket connection for real-time updates
+  // Reverse geocode bus coordinates to a human-readable location name
+  useEffect(() => {
+    const fetchLocationName = async () => {
+      if (!busStatus || isNaN(busStatus.mlat) || isNaN(busStatus.mlng)) return
+      try {
+        const maps = new GoogleMapsService()
+        const address = await maps.reverseGeocode(busStatus.mlat, busStatus.mlng)
+        setLocationName(address)
+      } catch (err) {
+        console.error("Error reverse geocoding:", err)
+        setLocationName(null)
+      }
+    }
+    fetchLocationName()
+  }, [busStatus?.mlat, busStatus?.mlng])
+
   useEffect(() => {
     if (!profile?.assignedBusId) return
-
     let ws: WebSocket | null = null
     let reconnectTimeout: NodeJS.Timeout | null = null
+    let offlineTimer: NodeJS.Timeout | null = null
 
     const connectWebSocket = () => {
       try {
-        // Use environment variable or fallback to localhost
-        const wsUrl = process.env.NEXT_PUBLIC_BACKEND_WS_URL || 'ws://localhost:8000'
+        const base = process.env.NEXT_PUBLIC_BACKEND_WS_URL || "http://localhost:8000"
+        const wsUrl = base.startsWith("http")
+          ? base.replace(/^http(s?):\/\//, (_, s) => (s ? "wss://" : "ws://"))
+          : base
         ws = new WebSocket(`${wsUrl}/ws/live`)
-
         ws.onopen = () => {
-          console.log('✅ WebSocket connected')
+          if (offlineTimer) clearTimeout(offlineTimer)
           setWsConnected(true)
           setError("")
         }
-
         ws.onmessage = async (event) => {
           try {
             const liveData = JSON.parse(event.data)
-            
-            // Find the assigned bus in the live data
-            const busDevice = liveData.find((item: any) => item.device_id === profile.assignedBusId)
-            
+            const busDevice = liveData.find(
+              (item: any) =>
+                item.device_id === profile.assignedBusId ||
+                item.plate_number === profile.assignedBusId ||
+                (item.device_info && String(item.device_info.erpId) === String(profile.assignedBusId)) ||
+                // Fuzzy match digits: "BusNo.6" matches "6"
+                (item.plate_number && String(item.plate_number).replace(/\D/g, '') === String(profile.assignedBusId).replace(/\D/g, ''))
+            )
             if (busDevice) {
-              // Fetch bus data from Firebase if not already loaded
               if (!busData && user) {
                 const firestoreService = new FirestoreService(user.uid)
                 const allBuses = await firestoreService.getAllBuses()
-                const firebaseBus = allBuses.find(b => b.busId === profile.assignedBusId)
-                if (firebaseBus) {
-                  setBusData(firebaseBus)
-                }
+                const firebaseBus = allBuses.find((b) => b.busId === profile.assignedBusId)
+                if (firebaseBus) setBusData(firebaseBus)
               }
-
               const gps = busDevice.gps || {}
               const status: ParentBusStatus = {
                 nm: busDevice.plate_number || busDevice.device_name || profile.assignedBusId,
@@ -208,343 +283,391 @@ export default function ParentDashboard() {
                 mlng: Number(gps.longitude || 0),
                 dt: gps.last_update ? new Date(gps.last_update * 1000).toISOString() : new Date().toISOString(),
                 online: !!gps.online,
+                s1: busDevice.s1,
               }
               setBusStatus(status)
               setLastUpdate(new Date())
             }
           } catch (err) {
-            console.error('Error parsing WebSocket message:', err)
+            console.error("Error parsing WebSocket message:", err)
           }
         }
-
-        ws.onerror = (error) => {
-          console.error('❌ WebSocket error:', error)
-          console.log('💡 Make sure backend is running at:', process.env.NEXT_PUBLIC_BACKEND_WS_URL || 'ws://localhost:8000')
-          setWsConnected(false)
+        ws.onerror = () => {
+          // Debounce offline indicator to avoid flicker during reconnects
+          offlineTimer = setTimeout(() => setWsConnected(false), 3000)
         }
-
-        ws.onclose = (event) => {
-          console.log('🔌 WebSocket disconnected. Code:', event.code, 'Reason:', event.reason || 'No reason provided')
-          setWsConnected(false)
-          
-          // Fallback to HTTP polling if WebSocket fails on first connection
-          console.log('🔄 Falling back to HTTP polling...')
+        ws.onclose = () => {
+          // Debounce offline indicator to avoid flicker during reconnects
+          offlineTimer = setTimeout(() => setWsConnected(false), 3000)
           fetchBusStatus()
-          
-          // Attempt to reconnect after 5 seconds
-          reconnectTimeout = setTimeout(() => {
-            console.log('🔄 Attempting to reconnect WebSocket...')
-            connectWebSocket()
-          }, 5000)
+          reconnectTimeout = setTimeout(connectWebSocket, 5000)
         }
       } catch (err) {
-        console.error('Failed to connect WebSocket:', err)
-        setError('Unable to establish real-time connection')
-        
-        // Fallback to HTTP polling
+        console.error("Failed to connect WebSocket:", err)
         fetchBusStatus()
         reconnectTimeout = setTimeout(connectWebSocket, 5000)
       }
     }
-
-    // Initial connection
     connectWebSocket()
-
-    // Cleanup on unmount
     return () => {
-      if (ws) {
-        ws.close()
-      }
-      if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout)
-      }
+      if (ws) ws.close()
+      if (reconnectTimeout) clearTimeout(reconnectTimeout)
+      if (offlineTimer) clearTimeout(offlineTimer)
     }
   }, [profile?.assignedBusId, user, busData, fetchBusStatus])
-
-  const handleLogout = async () => {
-    await logout()
-    router.push("/")
-  }
 
   const handleRefresh = () => {
     getCurrentLocation()
     fetchBusStatus()
   }
 
+  const passengerCount = busStatus?.s1 ? parseInt(busStatus.s1, 10) : null
+
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-emerald-100">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div>
+      <div className="h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800">
+        <div className="flex flex-col items-center gap-2">
+          <Bus className="h-10 w-10 text-blue-400 animate-bounce" />
+          <p className="text-slate-300 text-sm">Loading...</p>
+        </div>
       </div>
     )
   }
 
-  const passengerCount = busStatus?.s1 ? parseInt(busStatus.s1, 10) : null
-  if (passengerCount !== null && isNaN(passengerCount)) {
-    console.warn(`Could not parse passenger count from busStatus.s1: "${busStatus?.s1}"`)
-  }
-
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Professional Government Header */}
-      <header className="bg-white border-b-4 border-blue-600 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+    <div className="h-screen flex flex-col overflow-hidden bg-gradient-to-b from-slate-900 via-slate-800 to-slate-900 text-white">
+      {/* Background Effects */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-10 left-10 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl" />
+        <div className="absolute top-1/2 right-10 w-72 h-72 bg-purple-500/10 rounded-full blur-3xl" />
+      </div>
+
+      {/* Compact Header */}
+      <header className="relative z-10 border-b border-white/10 backdrop-blur-xl bg-slate-900/50 shrink-0">
+        <div className="max-w-7xl mx-auto px-3 py-2">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="bg-blue-600 p-3 rounded-lg">
-                <Bus className="h-8 w-8 text-white" />
-              </div>
-              <div>
-                <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">
-                  Parent Dashboard
-                </h1>
-                <p className="text-sm text-gray-600">School Transport Tracking System</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {/* WebSocket Status Indicator */}
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 text-xs">
-                <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-                <span className="text-gray-700 hidden sm:inline">{wsConnected ? 'Live' : 'Connecting...'}</span>
-              </div>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={handleRefresh}
-                className="border-blue-600 text-blue-600 hover:bg-blue-50"
+            <div className="flex items-center gap-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => router.push("/")}
+                className="text-slate-400 hover:text-white hover:bg-white/10 h-8 px-2"
               >
-                <RefreshCw className="h-4 w-4 sm:mr-2" />
-                <span className="hidden sm:inline">Refresh</span>
+                <ArrowLeft className="h-4 w-4 mr-1" />
+                <span className="text-sm">Home</span>
               </Button>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={handleLogout}
-                className="border-gray-300 hover:bg-gray-50"
-              >
-                <LogOut className="h-4 w-4 sm:mr-2" />
-                <span className="hidden sm:inline">Sign Out</span>
-              </Button>
-            </div>
-          </div>
-        </div>
-        <div className="bg-gray-100 border-t border-gray-200">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
-            <div className="flex items-center justify-between text-sm">
-              <div className="flex items-center gap-4">
-                <span className="text-gray-700">
-                  <strong>Parent:</strong> {profile?.name || "User"}
+              <div className="h-5 w-px bg-white/20" />
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-gradient-to-br from-blue-500/20 to-cyan-500/20 rounded-lg border border-blue-500/20">
+                  <Bus className="h-4 w-4 text-blue-400" />
+                </div>
+                <div>
+                  <h1 className="text-base font-bold bg-gradient-to-r from-white to-blue-100 bg-clip-text text-transparent">
+                    Live Tracking
+                  </h1>
+                </div>
+              </div>
+              <div className="hidden sm:flex items-center gap-3 ml-4 text-sm text-slate-300">
+                <span className="flex items-center gap-1">
+                  <User className="h-3 w-3 text-blue-400" />
+                  {profile?.name || "User"}
                 </span>
                 {profile?.assignedBusId && (
-                  <span className="text-gray-700">
-                    <strong>Bus ID:</strong> {profile.assignedBusId}
+                  <span className="flex items-center gap-1">
+                    <Bus className="h-3 w-3 text-cyan-400" />
+                    <span className="font-mono">{profile.assignedBusId}</span>
+                  </span>
+                )}
+                {lastUpdate && (
+                  <span className="flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    {lastUpdate.toLocaleTimeString("en-IN")}
                   </span>
                 )}
               </div>
-              {lastUpdate && (
-                <span className="text-gray-600 text-xs">
-                  Last Updated: {lastUpdate.toLocaleString('en-IN')}
-                </span>
-              )}
+            </div>
+            <div className="flex items-center gap-1.5">
+              {(() => {
+                const isLive = wsConnected || (!!lastUpdate && Date.now() - lastUpdate.getTime() < 15000)
+                return (
+                  <Badge
+                    className={`text-xs h-6 ${isLive
+                      ? "bg-green-500/20 text-green-400 border-green-500/30"
+                      : "bg-red-500/20 text-red-400 border-red-500/30"
+                      }`}
+                  >
+                    {isLive ? <Wifi className="h-3 w-3 mr-1" /> : <WifiOff className="h-3 w-3 mr-1" />}
+                    {isLive ? "Live" : "Offline"}
+                  </Badge>
+                )
+              })()}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleRefresh}
+                className="text-slate-400 hover:text-white hover:bg-white/10 h-7 w-7 p-0"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </Button>
             </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {error && (
-          <Alert variant="destructive" className="mb-6">
-            <AlertDescription className="flex items-center gap-2">
-              <span className="font-semibold">Error:</span> {error}
-            </AlertDescription>
-          </Alert>
-        )}
+      {/* Main Content - Flex Grow */}
+      <main className="relative z-10 flex-1 overflow-hidden">
+        <div className="h-full max-w-7xl mx-auto px-3 py-3">
+          {error && (
+            <div className="mb-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm flex items-center gap-2">
+              <Info className="h-4 w-4 shrink-0" />
+              {error}
+            </div>
+          )}
 
-        {!profile?.assignedBusId && !loading && (
-          <Card className="mb-6 border-2 border-orange-300 bg-orange-50">
-            <CardContent className="p-8 text-center">
-              <div className="bg-orange-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Bus className="h-10 w-10 text-orange-600" />
-              </div>
-              <h3 className="text-2xl font-bold text-gray-900 mb-2">
-                No Bus Assigned
-              </h3>
-              <p className="text-gray-700 max-w-md mx-auto">
-                Your ward is not currently assigned to a school bus. Please contact the school administration for bus assignment.
-              </p>
-              <div className="mt-6">
-                <Button variant="outline" className="border-orange-600 text-orange-600 hover:bg-orange-50">
-                  Contact School Administration
+          {!profile?.assignedBusId && !loading ? (
+            <Card className="bg-white/5 border-white/10 backdrop-blur-sm">
+              <CardContent className="p-6 text-center">
+                <div className="w-14 h-14 bg-gradient-to-br from-orange-500/20 to-red-500/20 rounded-full flex items-center justify-center mx-auto mb-3 border border-orange-500/20">
+                  <Bus className="h-7 w-7 text-orange-400" />
+                </div>
+                <h3 className="text-lg font-bold mb-1">No Bus Assigned</h3>
+                <p className="text-slate-300 text-sm mb-4">
+                  Please enter a bus number on the homepage to start tracking.
+                </p>
+                <Button
+                  onClick={() => router.push("/")}
+                  size="sm"
+                  className="bg-gradient-to-r from-blue-500 to-cyan-500"
+                >
+                  Go to Homepage
                 </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Main Content Grid */}
-        <div className="grid lg:grid-cols-3 gap-6">
-          {/* Left Column - Status Cards */}
-          <div className="lg:col-span-1 space-y-4">
-            {/* Bus Status Card */}
-            {busStatus && (
-              <Card className="border border-gray-300 shadow-sm">
-                <CardHeader className="bg-gray-50 border-b border-gray-200 pb-3">
-                  <CardTitle className="text-lg font-bold text-gray-900 flex items-center">
-                    <Bus className="h-5 w-5 mr-2 text-blue-600" />
-                    Vehicle Status
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-4 space-y-3">
-                  <div>
-                    <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Vehicle Number</label>
-                    <p className="text-lg font-bold text-gray-900 mt-1">
-                      {busData?.plateNumber || busStatus.nm}
-                    </p>
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Status</label>
-                    <div className="mt-1">
-                      <Badge 
-                        variant={busStatus.online ? "default" : "secondary"}
-                        className={`${busStatus.online ? 'bg-green-600' : 'bg-gray-400'} text-white font-semibold`}
-                      >
-                        {busStatus.online ? "● ACTIVE" : "● OFFLINE"}
-                      </Badge>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid lg:grid-cols-12 gap-3 h-full">
+              {/* Left Column - Compact Cards */}
+              <div className="lg:col-span-4 xl:col-span-3 flex flex-col gap-2 overflow-y-auto">
+                {/* Vehicle + Status Combined */}
+                {busStatus && (
+                  <Card className="bg-white/5 border-white/10 backdrop-blur-sm shrink-0">
+                    <div className="p-3 border-b border-white/5 bg-gradient-to-r from-blue-500/10 to-transparent">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Bus className="h-5 w-5 text-blue-400" />
+                          <span className="text-sm font-semibold text-white">Vehicle</span>
+                        </div>
+                        <Badge
+                          className={`text-xs h-5 ${busStatus.online
+                            ? "bg-green-500/20 text-green-400 border-green-500/30"
+                            : "bg-slate-500/20 text-slate-400 border-slate-500/30"
+                            }`}
+                        >
+                          {busStatus.online ? "● Active" : "● Offline"}
+                        </Badge>
+                      </div>
                     </div>
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Last Location Update</label>
-                    <p className="text-sm text-gray-700 mt-1">{new Date(busStatus.dt).toLocaleString('en-IN')}</p>
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">GPS Coordinates</label>
-                    <p className="text-xs text-gray-600 font-mono mt-1">
-                      {busStatus.mlat.toFixed(6)}, {busStatus.mlng.toFixed(6)}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Distance & ETA Card */}
-            {directions && (
-              <Card className="border border-gray-300 shadow-sm">
-                <CardHeader className="bg-gray-50 border-b border-gray-200 pb-3">
-                  <CardTitle className="text-lg font-bold text-gray-900 flex items-center">
-                    <Navigation className="h-5 w-5 mr-2 text-blue-600" />
-                    Travel Information
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-4 space-y-4">
-                  <div className="bg-blue-50 border-l-4 border-blue-600 p-4">
-                    <label className="text-xs font-semibold text-blue-900 uppercase tracking-wide">Distance</label>
-                    <p className="text-2xl font-bold text-blue-900 mt-1">{directions.distance}</p>
-                  </div>
-                  <div className="bg-orange-50 border-l-4 border-orange-600 p-4">
-                    <label className="text-xs font-semibold text-orange-900 uppercase tracking-wide">Estimated Arrival Time</label>
-                    <p className="text-2xl font-bold text-orange-900 mt-1">{directions.duration}</p>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </div>
-
-          {/* Right Column - Map */}
-          <div className="lg:col-span-2">
-            <Card className="border border-gray-300 shadow-sm h-full">
-              <CardHeader className="bg-gray-50 border-b border-gray-200 pb-3">
-                <CardTitle className="text-lg font-bold text-gray-900 flex items-center">
-                  <MapPin className="h-5 w-5 mr-2 text-blue-600" />
-                  Live Vehicle Tracking Map
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                {busStatus ? (
-                  <div className="h-[600px] lg:h-[700px] relative">
-                    <GoogleMap
-                      markers={[
-                        // Bus marker
-                        {
-                          lat: busStatus.mlat,
-                          lng: busStatus.mlng,
-                          label: busData?.plateNumber || busStatus.nm,
-                          status: busStatus.online ? 'online' : 'offline',
-                          type: 'bus'
-                        },
-                        // User location marker
-                        ...(parentLocation ? [{
-                          lat: parentLocation.latitude,
-                          lng: parentLocation.longitude,
-                          label: 'Your Location',
-                          type: 'user'
-                        }] : []),
-                        // Route polyline
-                        ...(directions?.polyline && parentLocation ? [{
-                          lat: 0,
-                          lng: 0,
-                          type: 'polyline',
-                          path: directions.polyline
-                        }] : [])
-                      ]}
-                      height="100%"
-                      width="100%"
-                    />
-                    {/* Map Legend */}
-                    <div className="absolute bottom-4 left-4 bg-white border-2 border-gray-300 rounded-lg p-3 shadow-lg">
-                      <p className="text-xs font-bold text-gray-900 mb-2">Map Legend</p>
-                      <div className="space-y-1 text-xs">
-                        <div className="flex items-center gap-2">
-                          <Bus className="h-3 w-3 text-blue-600" />
-                          <span className="text-gray-700">School Bus</span>
+                    <CardContent className="p-3 space-y-2">
+                      <div>
+                        <p className="text-lg font-bold text-white">{busData?.plateNumber || busStatus.nm}</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                          <span className="text-slate-400">Model:</span>
+                          <span className="text-white ml-1">{busData?.model || "—"}</span>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <MapPin className="h-3 w-3 text-red-600" />
-                          <span className="text-gray-700">Your Location</span>
+                        <div>
+                          <span className="text-slate-400">Capacity:</span>
+                          <span className="text-white ml-1">{busData?.capacity || "—"}</span>
                         </div>
-                        {directions && (
-                          <div className="flex items-center gap-2">
-                            <div className="w-4 h-0.5 bg-blue-600"></div>
-                            <span className="text-gray-700">Route</span>
+                        <div>
+                          <span className="text-slate-400">Updated:</span>
+                          <span className="text-white ml-1">{new Date(busStatus.dt).toLocaleTimeString("en-IN")}</span>
+                        </div>
+                        {passengerCount !== null && !isNaN(passengerCount) && (
+                          <div>
+                            <span className="text-slate-400">Passengers:</span>
+                            <span className="text-white ml-1">{passengerCount}</span>
                           </div>
                         )}
                       </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="h-[600px] flex items-center justify-center bg-gray-50">
-                    <div className="text-center">
-                      <div className="bg-gray-200 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <MapPin className="h-10 w-10 text-gray-400" />
-                      </div>
-                      <p className="text-gray-600 font-semibold">Waiting for vehicle location...</p>
-                      <div className="mt-4">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
-                      </div>
-                    </div>
-                  </div>
+                    </CardContent>
+                  </Card>
                 )}
-              </CardContent>
-            </Card>
-          </div>
+
+                {/* Distance & ETA Combined */}
+                {directions && (
+                  <Card className="bg-white/5 border-white/10 backdrop-blur-sm shrink-0">
+                    <div className="p-3 border-b border-white/5 bg-gradient-to-r from-purple-500/10 to-transparent">
+                      <div className="flex items-center gap-2">
+                        <Navigation className="h-5 w-5 text-purple-400" />
+                        <span className="text-sm font-semibold text-white">Travel Info</span>
+                      </div>
+                    </div>
+                    <CardContent className="p-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="p-3 rounded-lg bg-gradient-to-br from-blue-500/10 to-cyan-500/10 border border-blue-500/20">
+                          <div className="flex items-center gap-1 mb-1">
+                            <Route className="h-3.5 w-3.5 text-blue-400" />
+                            <span className="text-xs text-slate-400 uppercase">Distance</span>
+                          </div>
+                          <p className="text-xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+                            {directions.distance}
+                          </p>
+                        </div>
+                        <div className="p-3 rounded-lg bg-gradient-to-br from-purple-500/10 to-pink-500/10 border border-purple-500/20">
+                          <div className="flex items-center gap-1 mb-1">
+                            <Clock className="h-3.5 w-3.5 text-purple-400" />
+                            <span className="text-xs text-slate-400 uppercase">ETA</span>
+                          </div>
+                          <p className="text-xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+                            {directions.duration}
+                          </p>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* GPS Coordinates */}
+                {busStatus && (
+                  <Card className="bg-white/5 border-white/10 backdrop-blur-sm shrink-0">
+                    <CardContent className="p-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Compass className="h-4 w-4 text-green-400" />
+                        <span className="text-xs text-slate-400 uppercase font-medium">GPS Coordinates</span>
+                      </div>
+                      <div className="font-mono text-xs text-white bg-black/30 p-2.5 rounded-lg border border-white/10">
+                        <span className="text-slate-400">Lat:</span> {busStatus.mlat.toFixed(6)} &nbsp;
+                        <span className="text-slate-400">Lng:</span> {busStatus.mlng.toFixed(6)}
+                      </div>
+                      {locationName && (
+                        <div className="mt-2 text-xs text-slate-300">
+                          <span className="text-slate-400">Location:</span> {locationName}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Contact Info - Compact */}
+                <Card className="bg-white/5 border-white/10 backdrop-blur-sm shrink-0">
+                  <CardContent className="p-3">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Phone className="h-4 w-4 text-green-400" />
+                      <span className="text-xs text-slate-400 uppercase font-medium">Support</span>
+                    </div>
+                    <div className="space-y-1.5 text-xs text-white">
+                      <p className="flex items-center gap-2">
+                        <Mail className="h-3.5 w-3.5 text-slate-400" />
+                        support@globalschool.edu
+                      </p>
+                      <p className="flex items-center gap-2">
+                        <Phone className="h-3.5 w-3.5 text-slate-400" />
+                        +91-XXXX-XXXXXX
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Right Column - Map */}
+              <div className="lg:col-span-8 xl:col-span-9 h-full min-h-[300px]">
+                <Card className="bg-white/5 border-white/10 backdrop-blur-sm overflow-hidden h-full flex flex-col">
+                  <div className="p-3 border-b border-white/5 flex items-center justify-between bg-gradient-to-r from-cyan-500/10 to-transparent shrink-0">
+                    <div className="flex items-center gap-2">
+                      <MapPin className="h-5 w-5 text-cyan-400" />
+                      <span className="text-sm font-semibold text-white">Live Map</span>
+                    </div>
+                    {(wsConnected || (!!lastUpdate && Date.now() - lastUpdate.getTime() < 15000)) && (
+                      <span className="flex items-center gap-1.5 text-xs text-green-400">
+                        <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                        Real-time
+                      </span>
+                    )}
+                  </div>
+                  <div className="relative flex-1">
+                    {busStatus ? (
+                      <>
+                        <GoogleMap
+                          markers={[
+                            {
+                              lat: busStatus.mlat,
+                              lng: busStatus.mlng,
+                              label: busData?.plateNumber || busStatus.nm,
+                              status: busStatus.online ? "online" : "offline",
+                              type: "bus",
+                            },
+                            ...(parentLocation
+                              ? [
+                                {
+                                  lat: parentLocation.latitude,
+                                  lng: parentLocation.longitude,
+                                  label: "You",
+                                  type: "user",
+                                },
+                              ]
+                              : []),
+                            ...(directions?.polyline && parentLocation
+                              ? [
+                                {
+                                  lat: 0,
+                                  lng: 0,
+                                  type: "polyline",
+                                  path: directions.polyline,
+                                },
+                              ]
+                              : []),
+                          ]}
+                          height="100%"
+                          width="100%"
+                        />
+                        {/* Compact Legend */}
+                        <div className="absolute bottom-3 left-3 bg-slate-900/95 backdrop-blur-sm border border-white/10 rounded-lg p-2.5 shadow-xl">
+                          <div className="flex items-center gap-4 text-xs">
+                            <div className="flex items-center gap-1.5 text-white">
+                              <Bus className="h-3.5 w-3.5 text-blue-400" />
+                              <span>Bus</span>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-white">
+                              <MapPin className="h-3.5 w-3.5 text-red-400" />
+                              <span>You</span>
+                            </div>
+                            {directions && (
+                              <div className="flex items-center gap-1.5 text-white">
+                                <div className="w-4 h-0.5 bg-blue-500 rounded" />
+                                <span>Route</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="h-full flex items-center justify-center bg-slate-800/50">
+                        <div className="text-center">
+                          <MapPin className="h-10 w-10 text-slate-500 mx-auto mb-3" />
+                          <p className="text-slate-400 text-sm">Waiting for location...</p>
+                          <div className="w-6 h-6 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mx-auto mt-3" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </Card>
+              </div>
+            </div>
+          )}
         </div>
       </main>
 
-      {/* Official Footer */}
-      <footer className="bg-gray-800 text-white mt-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="grid md:grid-cols-3 gap-6 text-sm">
-            <div>
-              <h3 className="font-bold mb-2">About</h3>
-              <p className="text-gray-400">School Transport Tracking System - An initiative for student safety and parent convenience.</p>
+      {/* Compact Footer */}
+      <footer className="relative z-10 border-t border-white/10 bg-slate-900/50 backdrop-blur-sm shrink-0">
+        <div className="max-w-7xl mx-auto px-3 py-2">
+          <div className="flex items-center justify-between text-xs text-slate-400">
+            <div className="flex items-center gap-2">
+              <Bus className="h-4 w-4 text-blue-400" />
+              <span className="font-semibold text-slate-300">BusTracker</span>
+              <span className="hidden sm:inline text-slate-400">• School Transport System</span>
             </div>
-            <div>
-              <h3 className="font-bold mb-2">Support</h3>
-              <p className="text-gray-400">For technical support, contact: support@globalschool</p>
-            </div>
-            <div>
-              <h3 className="font-bold mb-2">System Information</h3>
-              <p className="text-gray-400">Version 1.0 | Last Updated: October 2025</p>
-            </div>
+            <span className="text-slate-400">© {new Date().getFullYear()} • v1.0</span>
           </div>
         </div>
       </footer>

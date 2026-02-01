@@ -27,8 +27,6 @@ Three demo users are available for testing:
 | Username | Password  | Role   | Email                    |
 |----------|-----------|--------|--------------------------|
 | admin    | admin123  | admin  | admin@bustracking.com   |
-| driver   | driver123 | driver | driver@bustracking.com  |
-| parent   | parent123 | parent | parent@bustracking.com  |
 
 ## API Endpoints
 

@@ -63,17 +63,17 @@ export interface BusAssignment {
 export class FirestoreService {
 
   // Add a new bus to the database
-  async addBus(bus: { busId: string; plateNumber: string; capacity: number; model?: string; year?: number; notes?: string; createdAt: string }) {
+  async addBus(bus: { busId: string; plateNumber: string; capacity: number; model?: string; year?: number; notes?: string; erpId?: string; createdAt: string }) {
     const busesCol = this.getPublicCollection('buses');
     await addDoc(busesCol, bus);
   }
 
   // Update an existing bus in the database
-  async updateBus(busId: string, updates: { plateNumber?: string; capacity?: number; model?: string; year?: number; notes?: string }) {
+  async updateBus(busId: string, updates: { plateNumber?: string; capacity?: number; model?: string; year?: number; notes?: string; erpId?: string }) {
     const busesCol = this.getPublicCollection('buses');
     const q = query(busesCol, where('busId', '==', busId));
     const snapshot = await getDocs(q);
-    
+
     if (snapshot.empty) {
       throw new Error(`Bus with ID ${busId} not found`);
     }
@@ -106,6 +106,19 @@ export class FirestoreService {
     const snapshot = await getDocs(busesCol);
     return snapshot.docs.map((doc) => doc.data());
   }
+
+  // Get bus by ERP ID
+  public async getBusByErpId(erpId: string): Promise<any | null> {
+    const busesCol = this.getPublicCollection('buses');
+    const q = query(busesCol, where('erpId', '==', erpId));
+    const snapshot = await getDocs(q);
+
+    if (snapshot.empty) {
+      return null;
+    }
+
+    return snapshot.docs[0].data();
+  }
   // Public data collections (shared)
   private getPublicCollection(collectionName: string) {
     return collection(this.db, `artifacts/${config.app.id}/public/data/${collectionName}`)
@@ -131,6 +144,19 @@ export class FirestoreService {
 
   async getStudentProfile(): Promise<StudentProfile | null> {
     return this.getProfile<StudentProfile>("student")
+  }
+
+  // Set or update the student's assigned bus ID
+  async setAssignedBus(busId: string) {
+    const docRef = doc(this.getUserCollection("profile"), "student")
+    await setDoc(
+      docRef,
+      {
+        assignedBusId: busId,
+        updatedAt: Timestamp.now(),
+      },
+      { merge: true }
+    )
   }
 
   // Admin operations
@@ -186,29 +212,29 @@ export class FirestoreService {
       callback(assignments)
     })
   }
-    // Get a route by its ID
-    async getRouteById(routeId: string): Promise<Route | null> {
-      const docRef = doc(this.getPublicCollection("routes"), routeId);
-      const docSnap = await getDoc(docRef);
-      if (!docSnap.exists()) return null;
-      return { id: docSnap.id, ...docSnap.data() } as Route;
-    }
+  // Get a route by its ID
+  async getRouteById(routeId: string): Promise<Route | null> {
+    const docRef = doc(this.getPublicCollection("routes"), routeId);
+    const docSnap = await getDoc(docRef);
+    if (!docSnap.exists()) return null;
+    return { id: docSnap.id, ...docSnap.data() } as Route;
+  }
 
-    // Update a bus assignment by its ID
-    async updateBusAssignment(assignmentId: string, updates: Partial<Omit<BusAssignment, "id" | "createdAt">>) {
-      const docRef = doc(this.getPublicCollection("busAssignments"), assignmentId);
-      await updateDoc(docRef, updates);
-    }
+  // Update a bus assignment by its ID
+  async updateBusAssignment(assignmentId: string, updates: Partial<Omit<BusAssignment, "id" | "createdAt">>) {
+    const docRef = doc(this.getPublicCollection("busAssignments"), assignmentId);
+    await updateDoc(docRef, updates);
+  }
 
-    // Delete a bus by its ID
-    async deleteBus(busId: string) {
-      const docRef = doc(this.getPublicCollection("buses"), busId);
-      await deleteDoc(docRef);
-    }
+  // Delete a bus by its ID
+  async deleteBus(busId: string) {
+    const docRef = doc(this.getPublicCollection("buses"), busId);
+    await deleteDoc(docRef);
+  }
 
-    // Delete a bus assignment by its ID
-    async deleteBusAssignment(assignmentId: string) {
-      const docRef = doc(this.getPublicCollection("busAssignments"), assignmentId);
-      await deleteDoc(docRef);
-    }
+  // Delete a bus assignment by its ID
+  async deleteBusAssignment(assignmentId: string) {
+    const docRef = doc(this.getPublicCollection("busAssignments"), assignmentId);
+    await deleteDoc(docRef);
+  }
 }

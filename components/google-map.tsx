@@ -211,7 +211,6 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({ markers, height = "400px",
   React.useEffect(() => {
     if (center && mapRef.current && window.google && window.google.maps) {
       mapRef.current.panTo(new window.google.maps.LatLng(center.lat, center.lng));
-      mapRef.current.setZoom(16);
     }
   }, [center]);
 

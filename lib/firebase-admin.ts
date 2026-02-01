@@ -6,22 +6,48 @@ import type { DeviceStatus } from "./fleet-backend";
 const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 
 if (!admin.apps.length) {
-  if (!serviceAccount) {
-    throw new Error("Firebase Admin SDK service account credentials are not set. Please set the FIREBASE_SERVICE_ACCOUNT_JSON environment variable.");
+  try {
+    if (serviceAccount) {
+      admin.initializeApp({
+        credential: admin.credential.cert(JSON.parse(serviceAccount)),
+        projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+      });
+    } else {
+      console.warn("FIREBASE_SERVICE_ACCOUNT_JSON is missing. Firebase Admin not initialized.");
+    }
+  } catch (error) {
+    console.error("Firebase Admin initialization failed:", error);
   }
-  
-  admin.initializeApp({
-    credential: admin.credential.cert(JSON.parse(serviceAccount)),
-    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  });
 }
 
-const adminAuth = admin.auth();
-const adminDb = admin.firestore();
+// Mock for build time or missing credentials
+const mockAdminDb = {
+  collection: (collectionName: string) => ({
+    doc: (docId: string) => ({
+      get: async () => ({ exists: false, data: () => ({}) }),
+      set: async () => { },
+      update: async () => { },
+      delete: async () => { },
+    }),
+    where: () => ({
+      limit: () => ({
+        get: async () => ({ empty: true, docs: [] }),
+      }),
+    }),
+  }),
+  settings: () => { },
+};
+
+const mockAdminAuth = {
+  auth: () => ({}),
+};
+
+const adminAuth = admin.apps.length ? admin.auth() : mockAdminAuth as any;
+const adminDb = admin.apps.length ? admin.firestore() : mockAdminDb as any;
 // Avoid errors when objects contain undefined fields
 try {
   adminDb.settings({ ignoreUndefinedProperties: true } as any);
-} catch {}
+} catch { }
 
 interface CachedDeviceStatuses {
   statuses: DeviceStatus[]

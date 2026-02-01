@@ -2,15 +2,17 @@ import { type NextRequest, NextResponse } from "next/server"
 import { fleetBackend, type DeviceIdentifier } from "@/lib/fleet-backend"
 import { AdminFirestoreService } from "@/lib/firebase-admin"
 
+export const dynamic = 'force-dynamic'
+
 export async function GET(request: NextRequest) {
   try {
     const adminFirestoreService = new AdminFirestoreService()
 
-    console.log(`Fetching fresh vehicle list from fleet.lagaam.in...`);
+
     // Get vehicle devices directly from getDeviceByVehicle endpoint
     // Get devices using valid vehicle ID format
     const devices: DeviceIdentifier[] = await fleetBackend.getDeviceByVehicle("all");
-    console.log(`Received ${devices.length} devices from API.`);
+
 
     // Group devices by vehicle ID with proper typing
     const vehiclesMap = devices.reduce((acc: Record<string, any>, device: DeviceIdentifier) => {
@@ -56,7 +58,7 @@ export async function GET(request: NextRequest) {
       .filter(s => s.id)
 
     // Update cache with transformed device statuses (non-blocking)
-    adminFirestoreService.setCachedDeviceStatuses(deviceStatuses).catch((e)=>{
+    adminFirestoreService.setCachedDeviceStatuses(deviceStatuses).catch((e) => {
       console.error("Failed to cache device statuses:", e?.message || e)
     });
 

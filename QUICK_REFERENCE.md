@@ -76,7 +76,7 @@ Parent/Student:
 - Login: `/login`
 - Admin Dashboard: `/admin/dashboard`
 - Parent Dashboard: `/parent/dashboard`
-- Driver Dashboard: `/driver/dashboard`
+- Driver Dashboard: removed in current build
 
 ---
 
@@ -266,7 +266,7 @@ pnpm build
 3. Replace alerts with toasts
 
 **Phase 2** (Important):
-4. Driver dashboard completion
+4. Driver dashboard completion (not applicable; feature removed)
 5. Push notifications
 6. Attendance tracking
 

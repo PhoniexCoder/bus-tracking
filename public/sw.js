@@ -1,7 +1,6 @@
 const CACHE_NAME = "bus-tracker-v1"
 const urlsToCache = [
   "/",
-  "/driver/login",
   "/admin/login",
   "/manifest.json",
   "/icon-192x192.png",

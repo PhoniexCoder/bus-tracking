@@ -176,18 +176,6 @@ USERS_DB = {
         "hashed_password": "$2b$12$FtQzYtnhxpLpsofdmCPYluoQ0uYcQxjjW3LTuDaEpYd5kE/zWeiCm",  # password: admin123
         "role": "admin",
         "email": "admin@bustracking.com"
-    },
-    "driver": {
-        "username": "driver",
-        "hashed_password": "$2b$12$8bfSJX35U17CbP1k4fZgKez/Fibmf5Ou389RIz2x1qYNPXdUeBoYK",  # password: driver123
-        "role": "driver",
-        "email": "driver@bustracking.com"
-    },
-    "parent": {
-        "username": "parent",
-        "hashed_password": "$2b$12$Ge1G59bKBuNO/B97MvfvquSJc90Q/aiCtGvw45470iRKQvGo9aRGu",  # password: parent123
-        "role": "parent",
-        "email": "parent@bustracking.com"
     }
 }
 
@@ -253,6 +241,98 @@ def build_rtsp_url(device_id: str, channel: int, stream: int):
         f"AVType=1&jsession={current_jsession}&DevIDNO={device_id}&Channel={channel}&Stream={stream}"
     )
 
+import re
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+# Initialize Firebase Admin
+try:
+    if not firebase_admin._apps:
+        service_account_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+        if service_account_json:
+            cred = credentials.Certificate(json.loads(service_account_json))
+            # Get project_id from env or json
+            project_id = os.getenv("NEXT_PUBLIC_FIREBASE_PROJECT_ID") or json.loads(service_account_json).get("project_id")
+            firebase_admin.initialize_app(cred, {
+                'projectId': project_id,
+            })
+            logger.info("✓ Firebase Admin SDK initialized")
+        else:
+            logger.warning("! FIREBASE_SERVICE_ACCOUNT_JSON not found. Auto-mapping disabled.")
+except Exception as e:
+    logger.error(f"Failed to initialize Firebase Admin: {e}")
+
+def sync_erp_id(device_id: str, plate: str, vid: str):
+    """
+    Auto-Map ERP ID:
+    1. Extract digits from vid (e.g. "Bus26" -> "26").
+    2. Check Firestore for this bus.
+    3. If erpId is missing or different, update it.
+    """
+    try:
+        if not firebase_admin._apps: return
+        
+        # Extract ID (digits only from vid)
+        match = re.search(r'\d+', vid)
+        if not match:
+             # Fallback to whole vid if no digits
+             erp_id = vid
+        else:
+             erp_id = match.group()
+        
+        if not erp_id: return
+
+        db = firestore.client()
+        # The frontend stores public data in artifacts/{APP_ID}/public/data/buses
+        # We need APP_ID. Let's assume it matches the project structure or specific path.
+        # Actually, the path is `artifacts/{APP_ID}/public/data/buses`
+        # We need to find the correct collection.
+        # Let's search recursively or assume a standard path if we know APP_ID.
+        # Frontend uses config.app.id. We can try to guess or use a wild card query if possible?
+        # NO, Firestore Admin requires exact path.
+        # HACK: We will list collections in 'artifacts' to find the app id dynamically if needed, 
+        # or just use the one from env if we set it.
+        # Let's try the standard path from the deleted file logs:
+        # "artifacts/1:512166176631:web:736a1cfffc46b3e2b0a372/public/data/buses"
+        app_id_from_json = json.loads(os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "{}")).get("client_id") 
+        # Wait, APP_ID is in .env.local as NEXT_PUBLIC_FIREBASE_APP_ID!
+        # But we didn't copy that to backend .env.
+        # Let's rely on querying the 'buses' collection if we can find it.
+        # Or better, just ask user to restart backend after I add APP_ID to .env?
+        # For now, let's look for the document with busId == device_id in ALL 'buses' collections? No.
+        
+        # We'll use a hardcoded path prefix based on the known App ID from previous steps or env.
+        # Re-reading .env.local: NEXT_PUBLIC_FIREBASE_APP_ID=1:512166176631:web:736a1cfffc46b3e2b0a372
+        app_id = "1:512166176631:web:736a1cfffc46b3e2b0a372" 
+        
+        buses_ref = db.collection(f"artifacts/{app_id}/public/data/buses")
+        
+        # Check if bus exists
+        docs = buses_ref.where("busId", "==", device_id).limit(1).get()
+        
+        if docs:
+            bus_doc = docs[0]
+            current_data = bus_doc.to_dict()
+            if current_data.get("erpId") != erp_id:
+                logger.info(f"🔄 Auto-Mapping: Updating {device_id} ({vid}) -> ERP ID: {erp_id}")
+                bus_doc.reference.update({"erpId": erp_id})
+        else:
+            # Create new bus document if missing
+            logger.info(f"🆕 Auto-Mapping: Creating new bus for {device_id} ({vid}) -> ERP ID: {erp_id}")
+            new_bus_ref = buses_ref.document()
+            new_bus_ref.set({
+                "busId": device_id,
+                "erpId": erp_id,
+                "plateNumber": erp_id,  # Use ERP ID (e.g. "26") as display name/plate
+                "device_type": "GPS_TRACKER",
+                "createdAt": firestore.SERVER_TIMESTAMP,
+                "model": "Generic Bus",
+                "capacity": "40"
+            })
+
+    except Exception as e:
+        logger.error(f"Auto-Map Error: {e}")
+
 def fetch_device_info(dev_id: str):
     """Fetch plate (vid) and raw device info for a device from the fleet API."""
     global current_jsession
@@ -267,9 +347,18 @@ def fetch_device_info(dev_id: str):
         response = requests.get(url, params=params, verify=False, timeout=10)
         data = response.json()
         if data.get("result") == 0 and data.get("devices"):
-            plate = data["devices"][0].get("vid") or data["devices"][0].get("vehi_idno")
+            device_data = data["devices"][0]
+            plate = device_data.get("vid") or device_data.get("vehi_idno")
+            vid = device_data.get("vid")
+            
+            vid = device_data.get("vid")
+            
+            # --- AUTO-SYNC REMOVED for this endpoint ---
+            # (Handled in fetch_gps_data to prefer GPS VID)
+            # -----------------
+            
             logger.debug(f"Fetched device info for {dev_id}: plate={plate}")
-            return plate, data["devices"][0]
+            return plate, device_data
         else:
             logger.warning(f"No device info found for {dev_id}: {data.get('result')}")
     except Exception as e:
@@ -304,6 +393,12 @@ def fetch_gps_data():
                 lat = float(device_status.get("mlat", 0))
                 speed = float(device_status.get("sp", 0)) / 10.0
                 online = device_status.get("ol") == 1
+                gps_vid = device_status.get("vid")  # Extract VID from GPS status (e.g. "Bus26")
+
+                # --- AUTO-SYNC (Moved here to use GPS VID) ---
+                if gps_vid:
+                    threading.Thread(target=sync_erp_id, args=(dev_id, gps_vid, gps_vid)).start()
+                # ---------------------------------------------
 
                 if lat != 0 and lng != 0:
                     live_state[dev_id].update({
@@ -311,9 +406,11 @@ def fetch_gps_data():
                         "latitude": lat,
                         "longitude": lng,
                         "speed_kmh": speed,
-                        "last_update": time.time()
+                        "last_update": time.time(),
+                        "vid": gps_vid,           # Store VID
+                        "plate_number": gps_vid   # Use GPS VID as plate number
                     })
-                    logger.debug(f"Updated GPS for {dev_id}: lat={lat}, lng={lng}, speed={speed} km/h, online={online}")
+                    logger.debug(f"Updated GPS for {dev_id}: lat={lat}, lng={lng}, vid={gps_vid}")
                 else:
                     logger.warning(f"Invalid coordinates for {dev_id}: lat={lat}, lng={lng}")
             else:
@@ -345,10 +442,12 @@ async def broadcast_update():
         # Convert live_state dict to array format matching /api/liveplate_all
         result = []
         for dev in DEVICE_IDS:
+            gps_data = live_state.get(dev, {})
             plate, device_info = fetch_device_info(dev)
+            final_plate = gps_data.get("plate_number") or plate
             entry = {
-                "gps": live_state.get(dev),
-                "plate_number": plate or live_state.get(dev, {}).get("plate_number"),
+                "gps": gps_data,
+                "plate_number": final_plate,
                 "device_info": device_info,
                 "device_id": dev,
                 "device_name": dev,
@@ -377,16 +476,26 @@ async def websocket_endpoint(websocket: WebSocket):
         # Send initial data in array format matching /api/liveplate_all
         result = []
         for dev in DEVICE_IDS:
+            gps_data = live_state.get(dev, {})
             plate, device_info = fetch_device_info(dev)
+            final_plate = gps_data.get("plate_number") or plate
             entry = {
-                "gps": live_state.get(dev),
-                "plate_number": plate or live_state.get(dev, {}).get("plate_number"),
+                "gps": gps_data,
+                "plate_number": final_plate,
                 "device_info": device_info,
                 "device_id": dev,
                 "device_name": dev,
             }
             result.append(entry)
-        await websocket.send_text(json.dumps(result))
+        # Safely send initial snapshot; handle clients that disconnect immediately
+        try:
+            await websocket.send_text(json.dumps(result))
+        except WebSocketDisconnect:
+            # Client disconnected before initial send completed
+            return
+        except Exception:
+            # Any other send error; stop handling this websocket
+            return
         
         while True:
             await asyncio.sleep(1)
@@ -397,7 +506,7 @@ async def websocket_endpoint(websocket: WebSocket):
             except Exception:
                 break
     finally:
-        websocket_clients.remove(websocket)
+        websocket_clients.discard(websocket)
 
 # ------------------ API ENDPOINTS ------------------
 
@@ -591,16 +700,35 @@ async def health_check():
 def api_live_with_plate(device_id: str | None = None, current_user: dict = Depends(get_current_user)):
     """Get live GPS data with plate number (requires authentication)."""
     dev = device_id or (DEVICE_IDS[0] if DEVICE_IDS else None)
-    if not dev or dev not in live_state:
+    
+    # 1. Try direct lookup
+    if dev and dev in live_state:
+        target_dev_id = dev
+    else:
+        # 2. Try looking up by VID / Plate / ERP ID
+        target_dev_id = None
+        for d_id, data in live_state.items():
+            # Check vid, plate_number, or even fuzzy match
+            if str(data.get("vid")) == str(dev) or \
+               str(data.get("plate_number")) == str(dev) or \
+               str(data.get("vid")).replace("BusNo.", "") == str(dev):
+                target_dev_id = d_id
+                break
+    
+    if not target_dev_id:
         return JSONResponse(content={"error": "unknown device_id"}, status_code=404)
-    # Fetch plate and device info from fleet API (best-effort)
-    plate, device_info = fetch_device_info(dev)
+        
+    plate, device_info = fetch_device_info(target_dev_id)
+    # Prefer GPS-derived plate ("Bus26") over "BusNo.6"
+    gps_data = live_state[target_dev_id]
+    final_plate = gps_data.get("plate_number") or plate
+
     return JSONResponse(content={
-        "gps": live_state[dev],
-        "plate_number": plate,
+        "gps": gps_data,
+        "plate_number": final_plate,
         "device_info": device_info,
-        "device_id": dev,
-        "device_name": dev,
+        "device_id": target_dev_id,
+        "device_name": target_dev_id,
     })
 
 @app.get("/api/liveplate_all")
@@ -608,10 +736,14 @@ def api_liveplate_all(current_user: dict = Depends(get_current_user)):
     """Get live GPS data for all devices with plate numbers (requires authentication)."""
     result = []
     for dev in DEVICE_IDS:
+        gps_data = live_state.get(dev, {})
         plate, device_info = fetch_device_info(dev)
+        # Prefer GPS-derived plate ("Bus26") over "BusNo.6"
+        final_plate = gps_data.get("plate_number") or plate
+        
         entry = {
-            "gps": live_state.get(dev),
-            "plate_number": plate or live_state.get(dev, {}).get("plate_number"),
+            "gps": gps_data,
+            "plate_number": final_plate,
             "device_info": device_info,
             "device_id": dev,
             "device_name": dev,

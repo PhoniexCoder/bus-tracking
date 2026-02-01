@@ -3,7 +3,7 @@
 ## 🔴 CRITICAL - Must Fix Before Deployment
 
 ### Security Issues
-- [ ] **Remove Firebase Admin SDK key from repository**
+- [x] **Remove Firebase Admin SDK key from repository**
   ```bash
   git rm --cached bus-tracking-7dcff-firebase-adminsdk-fbsvc-a118dbc578.json
   git commit -m "Remove sensitive Firebase key"
@@ -11,7 +11,7 @@
   - Store securely on server only
   - Add to `.gitignore` (already updated)
 
-- [ ] **Remove SSL certificates from repository**
+- [x] **Remove SSL certificates from repository**
   ```bash
   git rm --cached custom_ca_bundle.pem
   git rm --cached "USERTrust RSA Certification Authority.crt"
@@ -64,7 +64,7 @@
 ### Features
 - [ ] Implement JWT token refresh mechanism
 - [ ] Add delete bus functionality
-- [ ] Complete driver dashboard implementation
+- [ ] Complete driver dashboard implementation (removed in this build)
 - [ ] Add loading states for all async operations
 - [ ] Implement retry logic for failed API calls
 

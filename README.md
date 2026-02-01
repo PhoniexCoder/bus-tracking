@@ -96,13 +96,12 @@ service cloud.firestore {
 4. Run the development server:
    \`\`\`bash
    npm run dev
-   \`\`\`
+   ```
 
 ## Demo Credentials
 
 For testing purposes, you can use these demo credentials:
 
-- **Student**: ID: `student123`, Password: `demo123`
 - **Admin**: Username: `admin123`, Password: `demo123`
 
 ## Deployment
@@ -141,9 +140,3 @@ Make sure to set all required environment variables in your production environme
 ## Support
 
 For issues or questions, please check the documentation or create an issue in the repository.
-\`\`\`
-
-Now let's delete the old individual login pages since we have a unified login:
-
-```typescriptreact file="app/student/login/page.tsx" isDeleted="true"
-...deleted...

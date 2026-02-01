@@ -37,7 +37,11 @@ ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
 # JWT Authentication
 JWT_SECRET_KEY=<generate-your-own-secret>
 JWT_ALGORITHM=HS256
+JWT_ALGORITHM=HS256
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# Firebase Admin SDK (Production)
+FIREBASE_SERVICE_ACCOUNT_JSON='{ ...your service account json... }'
 ```
 
 **Generate a secure JWT secret:**
@@ -80,8 +84,6 @@ Headers: Authorization: Bearer <your_token>
 
 **Default users:**
 - `admin/admin123` (admin role)
-- `driver/driver123` (driver role)
-- `parent/parent123` (parent role)
 
 ## 📡 API Endpoints
 
@@ -143,6 +145,7 @@ All configuration is done via environment variables loaded from the root `.env.l
 - **Requests**: HTTP library for Fleet API calls
 - **python-dotenv**: Environment variable management
 - **websockets**: WebSocket support
+- **firebase-admin**: Firebase Admin SDK for authentication and other services
 
 ## 🐛 Debugging
 

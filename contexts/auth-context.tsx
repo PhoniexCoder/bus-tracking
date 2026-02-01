@@ -36,23 +36,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   useEffect(() => {
+    // When external ERP auth is enabled, try to hydrate role from URL/localStorage early
+    if (config.auth.externalEnabled) {
+      try {
+        const url = typeof window !== "undefined" ? new URL(window.location.href) : null
+        const roleParam = url?.searchParams.get("role")
+        const initialRole = (roleParam || localStorage.getItem("userRole")) as "student" | "parent" | "admin" | null
+        if (initialRole === "student" || initialRole === "parent" || initialRole === "admin") {
+          _setUserRole(initialRole)
+          localStorage.setItem("userRole", initialRole)
+        }
+      } catch { }
+    }
+
     // Firebase is now initialized globally, so we just need the listener.
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setUser(user)
         // On initial load or user change, try to get the role from localStorage
-  const storedRole = localStorage.getItem("userRole") as "student" | "parent" | "admin" | null
+        const storedRole = localStorage.getItem("userRole") as "student" | "parent" | "admin" | null
         if (storedRole) {
           _setUserRole(storedRole)
         }
       } else {
-        // If no user, sign in anonymously to maintain a session for non-logged-in users
-        try {
-          const userCredential = await signInAnonymously(auth)
-          setUser(userCredential.user)
-        } catch (error) {
-          console.error("Anonymous sign-in failed:", error)
-        }
         // Clear any lingering role from state and localStorage
         setUserRole(null)
       }

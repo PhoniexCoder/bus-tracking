@@ -18,6 +18,12 @@ export const config = {
     // FastAPI or other backend base URL
     baseUrl: process.env.NEXT_PUBLIC_BACKEND_BASE_URL || "http://localhost:8000",
   },
+  auth: {
+    externalEnabled: String(process.env.NEXT_PUBLIC_EXTERNAL_AUTH_ENABLED || "false").toLowerCase() === "true",
+    // Optional header names if ERP forwards identity via reverse proxy
+    erpUserIdHeader: process.env.NEXT_PUBLIC_ERP_USER_ID_HEADER || "x-erp-user-id",
+    erpUserRoleHeader: process.env.NEXT_PUBLIC_ERP_USER_ROLE_HEADER || "x-erp-user-role",
+  },
   app: {
     id: process.env.NEXT_PUBLIC_APP_ID || "bus_tracker_app",
     name: process.env.NEXT_PUBLIC_APP_NAME || "Bus Tracker",
