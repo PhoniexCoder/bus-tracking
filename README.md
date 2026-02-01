@@ -98,6 +98,23 @@ service cloud.firestore {
    npm run dev
    ```
 
+## Integration & ERP
+
+The system supports seamless integration with ERPs via "Magic Links" for parents.
+
+### Magic Link Format
+Generate this URL in your ERP system to give parents direct, zero-login access:
+
+```
+https://your-domain.com/parent/dashboard?busId=<BUS_NUMBER>
+```
+
+- **busId**: The visual bus number (e.g., `26`) or Plate Number.
+- **studentName** (Optional): Personalize the header (e.g., `&studentName=Rahul`).
+
+**Example**:
+`https://bus-tracker.vercel.app/parent/dashboard?busId=26&studentName=Rahul`
+
 ## Demo Credentials
 
 For testing purposes, you can use these demo credentials:
