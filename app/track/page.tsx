@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { FirestoreService } from '@/lib/firestore';
 import { Bus, Loader2, AlertCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 
-export default function TrackPage() {
+function TrackPageContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const [status, setStatus] = useState('Initializing...');
@@ -77,5 +77,17 @@ export default function TrackPage() {
                 </div>
             </div>
         </div>
+    );
+}
+
+export default function TrackPage() {
+    return (
+        <Suspense fallback={
+            <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white">
+                <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
+            </div>
+        }>
+            <TrackPageContent />
+        </Suspense>
     );
 }
