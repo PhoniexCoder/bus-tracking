@@ -214,7 +214,7 @@ export default function AdminDashboard() {
     setRefreshing(true)
     setError("")
     try {
-      const res = await fetchBackendAPI("/liveplate_all")
+      const res = await fetchBackendAPI("/api/liveplate_all")
       if (!res.ok) {
         throw new Error(`Failed to fetch fleet telemetry (status ${res.status})`)
       }
