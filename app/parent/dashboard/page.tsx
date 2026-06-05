@@ -30,7 +30,7 @@ interface ParentBusStatus {
 }
 
 export default function ParentDashboard() {
-  const { user, userRole, logout } = useAuth()
+  const { user, loading: authLoading, userRole, logout } = useAuth()
   const router = useRouter()
   const [profile, setProfile] = useState<StudentProfile | null>(null)
   const [busStatus, setBusStatus] = useState<ParentBusStatus | null>(null)
@@ -43,6 +43,9 @@ export default function ParentDashboard() {
   const [wsConnected, setWsConnected] = useState(false)
   const [showRoutePath, setShowRoutePath] = useState(true)
   const [stops, setStops] = useState<any[]>([])
+  const [availableBuses, setAvailableBuses] = useState<any[]>([])
+  const [busPickerOpen, setBusPickerOpen] = useState(false)
+  const [assigningBus, setAssigningBus] = useState(false)
   const busDataRef = useRef(busData)
   useEffect(() => {
     busDataRef.current = busData
@@ -109,7 +112,7 @@ export default function ParentDashboard() {
         }
       }
 
-      const response = await fetchBackendAPI(`/api/liveplate?device_id=${encodeURIComponent(profile.assignedBusId)}`)
+      const response = await fetchBackendAPI(`/liveplate?device_id=${encodeURIComponent(profile.assignedBusId)}`)
       const data = await response.json()
 
       if (!response.ok) {
@@ -134,6 +137,33 @@ export default function ParentDashboard() {
     }
   }, [profile?.assignedBusId, user, loadRouteStops])
 
+  const loadAvailableBuses = useCallback(async () => {
+    if (!user) return
+    try {
+      const firestoreService = new FirestoreService(user.sub)
+      const buses = await firestoreService.getAllBuses()
+      setAvailableBuses(buses)
+    } catch (err) {
+      console.error("Error loading available buses:", err)
+    }
+  }, [user])
+
+  const handleParentAssignBus = async (busId: string) => {
+    if (!user || !profile?.studentId) return
+    setAssigningBus(true)
+    try {
+      const firestoreService = new FirestoreService(user.sub)
+      await firestoreService.updateStudentProfile({ assignedBusId: busId })
+      setProfile((prev) => prev ? { ...prev, assignedBusId: busId } : null)
+      setBusPickerOpen(false)
+    } catch (err: any) {
+      console.error("Error assigning bus:", err)
+      setError("Failed to assign bus: " + err.message)
+    } finally {
+      setAssigningBus(false)
+    }
+  }
+
   // Calculate distance and ETA
   const calculateDirections = useCallback(async () => {
     if (!busStatus || !parentLocation) return
@@ -152,6 +182,8 @@ export default function ParentDashboard() {
 
   // Load student profile
   useEffect(() => {
+    if (authLoading) return
+
     if (!user || (userRole !== "student" && userRole !== "parent")) {
       router.push("/")
       return
@@ -174,7 +206,7 @@ export default function ParentDashboard() {
 
     loadProfile()
     getCurrentLocation()
-  }, [user, userRole, router, getCurrentLocation])
+  }, [user, userRole, authLoading, router, getCurrentLocation])
 
   // Calculate directions when bus or student location changes
   useEffect(() => {
@@ -451,14 +483,45 @@ export default function ParentDashboard() {
           ) : (
             <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center bg-[#111317]">
               {!profile?.assignedBusId && !loading ? (
-                <div className="glass-card border-yellow-500/20 bg-yellow-500/5 p-8 text-center rounded-[32px] max-w-md mx-6 shadow-2xl backdrop-blur">
+                <div className="glass-card p-8 text-center rounded-[32px] max-w-md mx-6 shadow-2xl backdrop-blur">
                   <div className="bg-yellow-500/10 border border-yellow-500/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
                     <Bus className="h-8 w-8 text-yellow-400" />
                   </div>
                   <h3 className="text-xl font-bold text-white mb-2">No Bus Assigned</h3>
-                  <p className="text-[#c7c4d7]/80 leading-relaxed text-sm">
-                    This account is not currently assigned to a school transport route. Please contact your coordinator.
+                  <p className="text-[#c7c4d7]/80 leading-relaxed text-sm mb-6">
+                    Select a bus to start tracking its real-time location.
                   </p>
+                  {busPickerOpen ? (
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {availableBuses.length === 0 ? (
+                        <p className="text-xs text-[#c7c4d7]/50">No buses available. Please contact your coordinator.</p>
+                      ) : (
+                        availableBuses.map((bus) => (
+                          <button
+                            key={bus.busId}
+                            onClick={() => handleParentAssignBus(bus.busId)}
+                            disabled={assigningBus}
+                            className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-white/5 hover:bg-[#5e5ce6]/20 border border-white/10 hover:border-[#5e5ce6]/30 transition-all text-left disabled:opacity-50"
+                          >
+                            <div>
+                              <p className="text-sm font-semibold text-white">{bus.busId}</p>
+                              {bus.plateNumber && bus.plateNumber !== bus.busId && (
+                                <p className="text-[10px] text-[#c7c4d7]/60">{bus.plateNumber}</p>
+                              )}
+                            </div>
+                            <Bus className="h-4 w-4 text-[#5e5ce6]" />
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => { loadAvailableBuses(); setBusPickerOpen(true) }}
+                      className="px-6 py-3 rounded-xl bg-[#5e5ce6] text-white font-semibold text-sm hover:brightness-110 transition-all active:scale-95"
+                    >
+                      Select Your Bus
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="text-center space-y-4">
@@ -485,9 +548,18 @@ export default function ParentDashboard() {
                     {busData?.plateNumber || busStatus.nm} - {busStatus.online ? 'Active' : 'Offline'}
                   </span>
                 </div>
-                <span className="text-[10px] bg-white/5 px-2 py-1 rounded-lg text-[#c7c4d7] border border-white/5 font-mono">
-                  {profile.assignedBusId}
-                </span>
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] bg-white/5 px-2 py-1 rounded-lg text-[#c7c4d7] border border-white/5 font-mono">
+                    {profile.assignedBusId}
+                  </span>
+                  <button
+                    onClick={() => { loadAvailableBuses(); setBusPickerOpen(!busPickerOpen) }}
+                    className="text-[10px] px-2 py-1 rounded-lg text-[#c7c4d7]/50 hover:text-[#c2c1ff] hover:bg-[#5e5ce6]/10 transition-all"
+                    title="Change bus"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
 
               {/* ETA CARD */}
@@ -544,6 +616,29 @@ export default function ParentDashboard() {
                   <div className="w-11 h-6 bg-[#333539] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#5e5ce6] active-glow"></div>
                 </label>
               </div>
+
+              {busPickerOpen && (
+                <div className="rounded-xl bg-[#1a1c1f] border border-white/10 p-3 space-y-1.5">
+                  <p className="text-[10px] text-[#c7c4d7]/60 uppercase tracking-wider font-semibold mb-2">Select a different bus</p>
+                  <div className="max-h-32 overflow-y-auto space-y-1">
+                    {availableBuses.map((bus) => (
+                      <button
+                        key={bus.busId}
+                        onClick={() => handleParentAssignBus(bus.busId)}
+                        disabled={assigningBus || bus.busId === profile?.assignedBusId}
+                        className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all text-left ${
+                          bus.busId === profile?.assignedBusId
+                            ? 'bg-[#5e5ce6]/20 text-[#c2c1ff] border border-[#5e5ce6]/30'
+                            : 'bg-white/5 hover:bg-[#5e5ce6]/10 text-white border border-white/5 hover:border-[#5e5ce6]/20'
+                        } disabled:opacity-50`}
+                      >
+                        <span className="font-mono">{bus.busId}</span>
+                        {bus.busId === profile?.assignedBusId && <span className="text-[9px]">Active</span>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <button 
                 onClick={handleRefresh}

@@ -78,7 +78,7 @@ function decodePolyline(encoded: string) {
 
 export default function AdminDashboard() {
   const router = useRouter()
-  const { user, userRole, logout } = useAuth()
+  const { user, loading: authLoading, userRole, logout } = useAuth()
   const [profile, setProfile] = useState<AdminProfile | null>(null)
   const [busDisplayData, setBusDisplayData] = useState<BusDisplayData[]>([])
   const [assignments, setAssignments] = useState<BusAssignment[]>([])
@@ -105,6 +105,9 @@ export default function AdminDashboard() {
   const [roadPolyline, setRoadPolyline] = useState<{ lat: number; lng: number }[] | null>(null)
   const [gpsAlert, setGpsAlert] = useState<string | null>(null)
   const [logs, setLogs] = useState<{ time: string; message: string; type: "system" | "route" | "alert" | "info" }[]>([])
+  const [students, setStudents] = useState<{ userId: string; profile: any }[]>([])
+  const [selectedBusForStudent, setSelectedBusForStudent] = useState<Record<string, string>>({})
+  const [studentFilter, setStudentFilter] = useState("")
 
   const allBusesRef = useRef(allBuses)
   const assignmentsRef = useRef(assignments)
@@ -211,7 +214,7 @@ export default function AdminDashboard() {
     setRefreshing(true)
     setError("")
     try {
-      const res = await fetchBackendAPI("/api/liveplate_all")
+      const res = await fetchBackendAPI("/liveplate_all")
       if (!res.ok) {
         throw new Error(`Failed to fetch fleet telemetry (status ${res.status})`)
       }
@@ -320,6 +323,8 @@ export default function AdminDashboard() {
 
   // Auth load profile
   useEffect(() => {
+    if (authLoading) return
+
     if (!user || userRole !== "admin") {
       router.push("/")
       return
@@ -341,13 +346,35 @@ export default function AdminDashboard() {
     }
 
     loadProfile()
-  }, [user, userRole, router])
+  }, [user, userRole, authLoading, router])
 
   useEffect(() => {
     if (profile) {
       fetchAllBusData()
     }
   }, [profile, fetchAllBusData])
+
+  const loadStudents = useCallback(async () => {
+    if (!user) return
+    try {
+      const firestoreService = new FirestoreService(user.sub)
+      const allStudents = await firestoreService.getAllStudents()
+      setStudents(allStudents)
+      const busMap: Record<string, string> = {}
+      allStudents.forEach((s) => {
+        if (s.profile.assignedBusId) busMap[s.userId] = s.profile.assignedBusId
+      })
+      setSelectedBusForStudent(busMap)
+    } catch (err) {
+      console.error("Error loading students:", err)
+    }
+  }, [user])
+
+  useEffect(() => {
+    if (profile) {
+      loadStudents()
+    }
+  }, [profile, loadStudents])
 
   // WebSocket Live telemetry synchronization
   useEffect(() => {
@@ -644,6 +671,19 @@ export default function AdminDashboard() {
     }
   }
 
+  const handleAssignBus = async (studentUserId: string, busId: string) => {
+    if (!user) return
+    try {
+      const firestoreService = new FirestoreService(user.sub)
+      await firestoreService.updateStudentBusAssignment(studentUserId, busId)
+      setSelectedBusForStudent((prev) => ({ ...prev, [studentUserId]: busId }))
+      setLogs((prev) => [...prev, { time: new Date().toLocaleTimeString("en-IN"), message: `Assigned bus ${busId} to student ${studentUserId}`, type: "system" }].slice(-15))
+    } catch (err: any) {
+      console.error("Error assigning bus:", err)
+      alert("Failed to assign bus: " + err.message)
+    }
+  }
+
   // Export logs to txt
   const exportLogs = () => {
     const logText = logs.map((l) => `[${l.time}] ${l.message}`).join("\n")
@@ -871,6 +911,7 @@ export default function AdminDashboard() {
                   <TabsList className="bg-white/5 border border-white/10 rounded-xl p-1 h-9">
                     <TabsTrigger value="overview" className="text-xs h-7 rounded-lg data-[state=active]:bg-[#5e5ce6] data-[state=active]:text-white">Fleet Cards</TabsTrigger>
                     <TabsTrigger value="map" className="text-xs h-7 rounded-lg data-[state=active]:bg-[#5e5ce6] data-[state=active]:text-white">Map View</TabsTrigger>
+                    <TabsTrigger value="students" className="text-xs h-7 rounded-lg data-[state=active]:bg-[#5e5ce6] data-[state=active]:text-white">Students</TabsTrigger>
                   </TabsList>
                 </div>
 
@@ -982,6 +1023,96 @@ export default function AdminDashboard() {
                         height="100%"
                         showTrafficLayer={true}
                       />
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+                <TabsContent value="students">
+                  <Card className="glass-card rounded-2xl border-white/10">
+                    <CardHeader className="bg-white/5 border-b border-white/5 py-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <CardTitle className="text-sm font-bold text-white flex items-center gap-2">
+                            <Users className="h-4 w-4 text-[#5e5ce6]" />
+                            Student Bus Assignment ({students.length})
+                          </CardTitle>
+                          <CardDescription className="text-[10px] text-[#c7c4d7]">Assign or change which bus each student/parent account is tracking</CardDescription>
+                        </div>
+                        <button
+                          onClick={loadStudents}
+                          className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-white text-xs hover:bg-white/10 transition-all"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          Refresh
+                        </button>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-white/5 text-[10px] uppercase tracking-wider text-[#c7c4d7]/60">
+                              <th className="text-left py-3 px-4 font-semibold">Student ID</th>
+                              <th className="text-left py-3 px-4 font-semibold">Name</th>
+                              <th className="text-left py-3 px-4 font-semibold">Current Bus</th>
+                              <th className="text-left py-3 px-4 font-semibold">Assign Bus</th>
+                              <th className="text-right py-3 px-4 font-semibold">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {students.length === 0 ? (
+                              <tr>
+                                <td colSpan={5} className="py-12 text-center">
+                                  <Users className="h-8 w-8 text-[#c7c4d7]/20 mx-auto mb-2" />
+                                  <p className="text-sm text-[#c7c4d7]/70 font-semibold">No student profiles found. Students are created when parents log in for the first time.</p>
+                                </td>
+                              </tr>
+                            ) : (
+                              students.map((student, i) => (
+                                <tr key={student.userId} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                                  <td className="py-3 px-4">
+                                    <span className="text-white font-mono text-xs">{student.profile.studentId || student.userId}</span>
+                                  </td>
+                                  <td className="py-3 px-4 text-white text-xs">{student.profile.name || "—"}</td>
+                                  <td className="py-3 px-4">
+                                    {student.profile.assignedBusId ? (
+                                      <Badge className="bg-[#5e5ce6]/20 text-[#c2c1ff] border border-[#5e5ce6]/30 text-[10px] font-mono">
+                                        {student.profile.assignedBusId}
+                                      </Badge>
+                                    ) : (
+                                      <span className="text-[#c7c4d7]/50 text-xs">Not assigned</span>
+                                    )}
+                                  </td>
+                                  <td className="py-3 px-4">
+                                    <select
+                                      value={selectedBusForStudent[student.userId] || ""}
+                                      onChange={(e) =>
+                                        setSelectedBusForStudent((prev) => ({ ...prev, [student.userId]: e.target.value }))
+                                      }
+                                      className="bg-[#1a1c1f] border border-white/10 rounded-lg text-xs py-1.5 px-2 text-white w-full max-w-[180px]"
+                                    >
+                                      <option value="">— No bus —</option>
+                                      {allBuses.map((bus) => (
+                                        <option key={bus.busId} value={bus.busId}>
+                                          {bus.busId}{bus.plateNumber && bus.plateNumber !== bus.busId ? ` (${bus.plateNumber})` : ""}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </td>
+                                  <td className="py-3 px-4 text-right">
+                                    <button
+                                      onClick={() => handleAssignBus(student.userId, selectedBusForStudent[student.userId] || "")}
+                                      disabled={selectedBusForStudent[student.userId] === student.profile.assignedBusId}
+                                      className="px-3 py-1.5 rounded-xl bg-[#5e5ce6] text-white font-semibold text-[10px] hover:brightness-110 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                                    >
+                                      Save
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
                     </CardContent>
                   </Card>
                 </TabsContent>

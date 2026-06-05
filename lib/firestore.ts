@@ -2,6 +2,7 @@ import { db as clientDb } from "./firebase"
 import { config } from "./config"
 import {
   collection,
+  collectionGroup,
   doc,
   setDoc,
   getDoc,
@@ -26,6 +27,7 @@ interface BaseProfile {
 export interface StudentProfile extends BaseProfile {
   studentId: string
   assignedBusId?: string
+  updatedAt?: Timestamp
 }
 
 export interface AdminProfile extends BaseProfile {
@@ -131,6 +133,28 @@ export class FirestoreService {
 
   async getStudentProfile(): Promise<StudentProfile | null> {
     return this.getProfile<StudentProfile>("student")
+  }
+
+  async updateStudentProfile(data: Partial<StudentProfile>) {
+    const docRef = doc(this.getUserCollection("profile"), "student")
+    await updateDoc(docRef, { ...data, updatedAt: Timestamp.now() })
+  }
+
+  async getAllStudents(): Promise<{ userId: string; profile: StudentProfile }[]> {
+    const groupQuery = query(
+      collectionGroup(this.db, "profile"),
+      where("type", "==", "student")
+    )
+    const snapshot = await getDocs(groupQuery)
+    return snapshot.docs.map((doc) => ({
+      userId: doc.ref.parent.parent?.id || "",
+      profile: doc.data() as StudentProfile,
+    }))
+  }
+
+  async updateStudentBusAssignment(studentUserId: string, assignedBusId: string) {
+    const docRef = doc(this.db, `artifacts/${config.app.id}/users/${studentUserId}/profile/student`)
+    await updateDoc(docRef, { assignedBusId, updatedAt: Timestamp.now() })
   }
 
   // Admin operations

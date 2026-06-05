@@ -114,7 +114,6 @@ export default function LoginPage() {
               studentId: username,
               username: username,
               name: `Student ${username}`,
-              assignedBusId: "demo-bus-001",
               createdAt: Timestamp.now(),
             })
           }

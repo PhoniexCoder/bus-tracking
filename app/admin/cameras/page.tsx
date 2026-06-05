@@ -57,14 +57,14 @@ export default function CameraFeedPage() {
   }, [erroredCount])
 
   useEffect(() => {
-    if (!user || userRole !== "admin") {
+    if (!loading && (!user || userRole !== "admin")) {
       router.push("/")
       return
     }
 
     const fetchDevices = async () => {
       try {
-        const res = await fetch("/api/fleet/api/liveplate_all")
+        const res = await fetch("/api/fleet/liveplate_all")
         if (res.ok) {
           const data: DeviceEntry[] = await res.json()
           setDevices(data)
