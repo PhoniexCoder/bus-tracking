@@ -120,7 +120,7 @@ export default function ParentDashboard() {
         }
       }
 
-      const response = await fetchBackendAPI(`/liveplate?device_id=${encodeURIComponent(profile.assignedBusId)}`)
+      const response = await fetchBackendAPI(`/api/liveplate?device_id=${encodeURIComponent(profile.assignedBusId)}`)
       const data = await response.json()
 
       if (!response.ok) {
