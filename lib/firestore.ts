@@ -13,6 +13,7 @@ import {
   addDoc,
   updateDoc,
   deleteDoc,
+  deleteField,
   Timestamp,
   type Firestore,
 } from "firebase/firestore"
@@ -154,7 +155,11 @@ export class FirestoreService {
 
   async updateStudentBusAssignment(studentUserId: string, assignedBusId: string) {
     const docRef = doc(this.db, `artifacts/${config.app.id}/users/${studentUserId}/profile/student`)
-    await updateDoc(docRef, { assignedBusId, updatedAt: Timestamp.now() })
+    if (assignedBusId) {
+      await updateDoc(docRef, { assignedBusId, updatedAt: Timestamp.now() })
+    } else {
+      await updateDoc(docRef, { assignedBusId: deleteField(), updatedAt: Timestamp.now() })
+    }
   }
 
   // Admin operations

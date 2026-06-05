@@ -87,6 +87,14 @@ export default function AdminDashboard() {
   const [error, setError] = useState("")
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
   const [allBuses, setAllBuses] = useState<any[]>([])
+  const uniqueBuses = useMemo(() => {
+    const seen = new Set<string>()
+    return allBuses.filter((bus) => {
+      if (seen.has(bus.busId)) return false
+      seen.add(bus.busId)
+      return true
+    })
+  }, [allBuses])
   const [wsConnected, setWsConnected] = useState(false)
   const [busStops, setBusStops] = useState<BusStops>({})
   const [newStop, setNewStop] = useState<{ [busId: string]: StopInput }>({})
@@ -145,7 +153,16 @@ export default function AdminDashboard() {
     return () => clearInterval(interval)
   }, [])
 
-  const busIds = useMemo(() => busDisplayData.map((b) => b.status.vid), [busDisplayData])
+  const uniqueBusDisplayData = useMemo(() => {
+    const seen = new Set<string>()
+    return busDisplayData.filter((b) => {
+      if (seen.has(b.status.id)) return false
+      seen.add(b.status.id)
+      return true
+    })
+  }, [busDisplayData])
+
+  const busIds = useMemo(() => uniqueBusDisplayData.map((b) => b.status.vid), [uniqueBusDisplayData])
 
   useEffect(() => {
     if (!selectedBusId && busIds.length > 0) setSelectedBusId(busIds[0])
@@ -716,13 +733,13 @@ export default function AdminDashboard() {
 
   // Filter Cards by search input
   const filteredBuses = useMemo(() => {
-    return busDisplayData.filter((b) => {
+    return uniqueBusDisplayData.filter((b) => {
       const canonicalBusId = b.assignment?.busId || b.status.vid
       const plate = (b.plate_number || "").toLowerCase()
       const query = searchTerm.toLowerCase()
       return canonicalBusId.toLowerCase().includes(query) || plate.includes(query)
     })
-  }, [busDisplayData, searchTerm])
+  }, [uniqueBusDisplayData, searchTerm])
 
   if (loading) {
     return (
@@ -973,7 +990,7 @@ export default function AdminDashboard() {
                     <CardContent className="p-0 h-[480px]">
                       <GoogleMap
                         markers={(() => {
-                          const busMarkers = busDisplayData
+                          const busMarkers = uniqueBusDisplayData
                             .filter((b) => b.status.mlat && b.status.mlng)
                             .map((b) => ({
                               lat: parseFloat(b.status.mlat),
@@ -1010,7 +1027,7 @@ export default function AdminDashboard() {
                         })()}
                         center={(() => {
                           if (selectedBusId) {
-                            const selectedBus = busDisplayData.find((b) => b.status.vid === selectedBusId)
+                            const selectedBus = uniqueBusDisplayData.find((b) => b.status.vid === selectedBusId)
                             if (selectedBus?.status.mlat && selectedBus.status.mlng) {
                               return {
                                 lat: parseFloat(selectedBus.status.mlat),
@@ -1091,7 +1108,7 @@ export default function AdminDashboard() {
                                       className="bg-[#1a1c1f] border border-white/10 rounded-lg text-xs py-1.5 px-2 text-white w-full max-w-[180px]"
                                     >
                                       <option value="">— No bus —</option>
-                                      {allBuses.map((bus) => (
+                                      {uniqueBuses.map((bus) => (
                                         <option key={bus.busId} value={bus.busId}>
                                           {bus.busId}{bus.plateNumber && bus.plateNumber !== bus.busId ? ` (${bus.plateNumber})` : ""}
                                         </option>

@@ -1,11 +1,20 @@
 import { NextRequest, NextResponse } from "next/server"
 
-const ALLOWED_DOMAINS = (process.env.PROXY_ALLOWED_DOMAINS || "")
+const ALLOWED_DOMAINS = (process.env.PROXY_ALLOWED_DOMAINS || "maps.googleapis.com")
   .split(",")
   .map((d) => d.trim().toLowerCase())
   .filter(Boolean)
 
 function isDomainAllowed(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    if (parsed.hostname === "maps.googleapis.com" || parsed.hostname.endsWith(".googleapis.com")) {
+      return true
+    }
+  } catch {
+    return false
+  }
+
   if (ALLOWED_DOMAINS.length === 0 && process.env.NODE_ENV !== "development") {
     return false
   }

@@ -166,12 +166,14 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({ markers, height = "400px",
     const initMap = () => {
       if (!window.google?.maps?.marker || !ref.current) return
       if (!mapRef.current) {
+        const cloudMapId = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID
+        const isCloudMapId = !!cloudMapId
         mapRef.current = new window.google.maps.Map(ref.current, {
           center: markers.length > 0 ? { lat: markers[0].lat, lng: markers[0].lng } : { lat: 0, lng: 0 },
           zoom: 18,
           mapTypeId: 'roadmap',
-          styles: darkMapStyle,
-          mapId: process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID || "DEMO_MAP_ID",
+          mapId: cloudMapId || "DEMO_MAP_ID",
+          ...(isCloudMapId ? {} : { styles: darkMapStyle }),
         })
       }
       updateMarkers(true)

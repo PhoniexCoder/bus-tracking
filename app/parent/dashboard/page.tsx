@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { useAuth } from "@/contexts/auth-context"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
@@ -44,6 +44,14 @@ export default function ParentDashboard() {
   const [showRoutePath, setShowRoutePath] = useState(true)
   const [stops, setStops] = useState<any[]>([])
   const [availableBuses, setAvailableBuses] = useState<any[]>([])
+  const uniqueAvailableBuses = useMemo(() => {
+    const seen = new Set<string>()
+    return availableBuses.filter((bus) => {
+      if (seen.has(bus.busId)) return false
+      seen.add(bus.busId)
+      return true
+    })
+  }, [availableBuses])
   const [busPickerOpen, setBusPickerOpen] = useState(false)
   const [assigningBus, setAssigningBus] = useState(false)
   const busDataRef = useRef(busData)
@@ -116,7 +124,13 @@ export default function ParentDashboard() {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data?.error || "Failed to fetch bus status")
+        setBusStatus(null)
+        if (response.status === 404 && data?.error?.includes("unknown device_id")) {
+          setError(`Bus device "${profile.assignedBusId}" is not registered on the fleet server. Select a different bus or ask an admin to add it.`)
+        } else {
+          throw new Error(data?.error || "Failed to fetch bus status")
+        }
+        return
       }
 
       const gps = data?.gps || {}
@@ -133,7 +147,8 @@ export default function ParentDashboard() {
       loadRouteStops(profile.assignedBusId)
     } catch (err) {
       console.error("Error fetching bus status:", err)
-      setError("Unable to fetch bus location")
+      setBusStatus(null)
+      setError("Unable to connect to fleet server. It may be offline.")
     }
   }, [profile?.assignedBusId, user, loadRouteStops])
 
@@ -180,6 +195,11 @@ export default function ParentDashboard() {
     }
   }, [busStatus, parentLocation])
 
+  const calculateDirectionsKey = useMemo(() => {
+    if (!busStatus || !parentLocation) return null
+    return `${busStatus.mlat},${busStatus.mlng}-${parentLocation.latitude},${parentLocation.longitude}`
+  }, [busStatus, parentLocation])
+
   // Load student profile
   useEffect(() => {
     if (authLoading) return
@@ -208,10 +228,25 @@ export default function ParentDashboard() {
     getCurrentLocation()
   }, [user, userRole, authLoading, router, getCurrentLocation])
 
+  // Fetch bus status when profile loads with assigned bus
+  useEffect(() => {
+    if (profile?.assignedBusId) {
+      fetchBusStatus()
+    }
+  }, [profile?.assignedBusId, fetchBusStatus])
+
+  // Poll for bus status every 30s until connected
+  useEffect(() => {
+    if (!profile?.assignedBusId || busStatus) return
+    const interval = setInterval(fetchBusStatus, 30000)
+    return () => clearInterval(interval)
+  }, [profile?.assignedBusId, busStatus, fetchBusStatus])
+
   // Calculate directions when bus or student location changes
   useEffect(() => {
+    if (!calculateDirectionsKey) return
     calculateDirections()
-  }, [calculateDirections])
+  }, [calculateDirectionsKey, calculateDirections])
 
   // WebSocket connection for real-time updates
   useEffect(() => {
@@ -427,266 +462,305 @@ export default function ParentDashboard() {
 
       {/* MAIN CANVAS (Interactive Map) */}
       <main className="flex-1 w-full md:pl-64 pt-16 relative overflow-hidden h-full">
-        {/* Error banner */}
-        {error && (
-          <div className="absolute top-4 left-4 right-4 z-30 mx-auto max-w-xl">
-            <Alert variant="destructive" className="bg-red-950/80 border-red-500/30 text-red-400 rounded-xl backdrop-blur">
-              <AlertDescription className="font-semibold text-center text-xs flex items-center justify-center gap-2">
-                <ShieldAlert className="h-4 w-4" />
-                {error}
-              </AlertDescription>
-            </Alert>
-          </div>
-        )}
-
-        {/* Map Background */}
-        <div className="absolute inset-0 z-0 h-full w-full">
-          {profile?.assignedBusId && busStatus ? (
-            <GoogleMap
-              markers={[
-                // Bus marker
-                {
-                  lat: busStatus.mlat,
-                  lng: busStatus.mlng,
-                  label: busData?.plateNumber || busStatus.nm,
-                  status: busStatus.online ? 'online' : 'offline',
-                  type: 'bus',
-                },
-                // User/Parent marker
-                ...(parentLocation ? [{
-                  lat: parentLocation.latitude,
-                  lng: parentLocation.longitude,
-                  label: 'Parent Location',
-                  type: 'user',
-                }] : []),
-                // Route stops markers
-                ...stops.map((stop, i) => ({
-                  lat: stop.latitude,
-                  lng: stop.longitude,
-                  label: `${i + 1}`,
-                  type: 'stop',
-                  status: 'notpassed',
-                })),
-                // Route polyline
-                ...(showRoutePath && directions?.polyline && parentLocation ? [{
-                  lat: 0,
-                  lng: 0,
-                  type: 'polyline',
-                  path: directions.polyline,
-                }] : [])
-              ]}
-              center={busStatus ? { lat: busStatus.mlat, lng: busStatus.mlng } : undefined}
-              height="100%"
-              width="100%"
-              showTrafficLayer={true}
-            />
-          ) : (
-            <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center bg-[#111317]">
-              {!profile?.assignedBusId && !loading ? (
-                <div className="glass-card p-8 text-center rounded-[32px] max-w-md mx-6 shadow-2xl backdrop-blur">
-                  <div className="bg-yellow-500/10 border border-yellow-500/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
-                    <Bus className="h-8 w-8 text-yellow-400" />
-                  </div>
-                  <h3 className="text-xl font-bold text-white mb-2">No Bus Assigned</h3>
-                  <p className="text-[#c7c4d7]/80 leading-relaxed text-sm mb-6">
-                    Select a bus to start tracking its real-time location.
-                  </p>
-                  {busPickerOpen ? (
-                    <div className="space-y-2 max-h-48 overflow-y-auto">
-                      {availableBuses.length === 0 ? (
-                        <p className="text-xs text-[#c7c4d7]/50">No buses available. Please contact your coordinator.</p>
-                      ) : (
-                        availableBuses.map((bus) => (
-                          <button
-                            key={bus.busId}
-                            onClick={() => handleParentAssignBus(bus.busId)}
-                            disabled={assigningBus}
-                            className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-white/5 hover:bg-[#5e5ce6]/20 border border-white/10 hover:border-[#5e5ce6]/30 transition-all text-left disabled:opacity-50"
-                          >
-                            <div>
-                              <p className="text-sm font-semibold text-white">{bus.busId}</p>
-                              {bus.plateNumber && bus.plateNumber !== bus.busId && (
-                                <p className="text-[10px] text-[#c7c4d7]/60">{bus.plateNumber}</p>
-                              )}
-                            </div>
-                            <Bus className="h-4 w-4 text-[#5e5ce6]" />
-                          </button>
-                        ))
-                      )}
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => { loadAvailableBuses(); setBusPickerOpen(true) }}
-                      className="px-6 py-3 rounded-xl bg-[#5e5ce6] text-white font-semibold text-sm hover:brightness-110 transition-all active:scale-95"
-                    >
-                      Select Your Bus
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <div className="text-center space-y-4">
-                  <div className="bg-[#5e5ce6]/10 border border-[#5e5ce6]/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto animate-pulse">
-                    <MapPin className="h-8 w-8 text-[#5e5ce6]" />
-                  </div>
-                  <p className="text-sm font-bold text-white uppercase tracking-wider">Establishing Connection</p>
-                  <p className="text-xs text-[#c7c4d7]/60">Waiting for vehicle telemetry signals...</p>
-                </div>
-              )}
+        {/* Inner container to constrain absolute layout elements within the visible content area */}
+        <div className="relative w-full h-full">
+          {/* Error banner */}
+          {error && (
+            <div className="absolute top-4 left-4 right-4 z-30 mx-auto max-w-xl">
+              <Alert variant="destructive" className="bg-red-950/80 border-red-500/30 text-red-400 rounded-xl backdrop-blur">
+                <AlertDescription className="font-semibold text-center text-xs flex items-center justify-center gap-2">
+                  <ShieldAlert className="h-4 w-4" />
+                  {error}
+                </AlertDescription>
+              </Alert>
             </div>
           )}
-        </div>
 
-        {/* FLOATING CONTROL PANEL */}
-        {profile?.assignedBusId && busStatus && (
-          <div className="absolute left-4 top-4 bottom-24 md:bottom-4 w-[calc(100%-32px)] md:w-80 z-20 pointer-events-none flex flex-col gap-4 max-h-[calc(100%-110px)] overflow-y-auto pr-1">
-            <div className="glass-card rounded-2xl p-4 pointer-events-auto flex flex-col gap-4 backdrop-blur">
-              {/* STATUS HEADER */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className={`w-3 h-3 rounded-full ${busStatus.online ? 'bg-green-400 pulse-indicator' : 'bg-gray-500'}`}></span>
-                  <span className="font-semibold text-white text-sm">
-                    {busData?.plateNumber || busStatus.nm} - {busStatus.online ? 'Active' : 'Offline'}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] bg-white/5 px-2 py-1 rounded-lg text-[#c7c4d7] border border-white/5 font-mono">
-                    {profile.assignedBusId}
-                  </span>
-                  <button
-                    onClick={() => { loadAvailableBuses(); setBusPickerOpen(!busPickerOpen) }}
-                    className="text-[10px] px-2 py-1 rounded-lg text-[#c7c4d7]/50 hover:text-[#c2c1ff] hover:bg-[#5e5ce6]/10 transition-all"
-                    title="Change bus"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-
-              {/* ETA CARD */}
-              <div className="bg-[#5e5ce6]/95 rounded-xl p-4 shadow-lg flex flex-col items-center text-center text-white">
-                <span className="text-[10px] text-white/75 uppercase tracking-widest mb-1">Estimated Arrival</span>
-                <span className="text-2xl font-bold mb-2">{directions?.duration || "Calculating..."}</span>
-                {directions?.distance && (
-                  <div className="flex items-center gap-1.5 text-white/90 text-xs">
-                    <Navigation className="h-3.5 w-3.5" />
-                    <span>{directions.distance} away</span>
+          {/* Map Background */}
+          <div className="absolute inset-0 z-0 h-full w-full">
+            {profile?.assignedBusId && busStatus ? (
+              <GoogleMap
+                markers={[
+                  // Bus marker
+                  {
+                    lat: busStatus.mlat,
+                    lng: busStatus.mlng,
+                    label: busData?.plateNumber || busStatus.nm,
+                    status: busStatus.online ? 'online' : 'offline',
+                    type: 'bus',
+                  },
+                  // User/Parent marker
+                  ...(parentLocation ? [{
+                    lat: parentLocation.latitude,
+                    lng: parentLocation.longitude,
+                    label: 'Parent Location',
+                    type: 'user',
+                  }] : []),
+                  // Route stops markers
+                  ...stops.map((stop, i) => ({
+                    lat: stop.latitude,
+                    lng: stop.longitude,
+                    label: `${i + 1}`,
+                    type: 'stop',
+                    status: 'notpassed',
+                  })),
+                  // Route polyline
+                  ...(showRoutePath && directions?.polyline && parentLocation ? [{
+                    lat: 0,
+                    lng: 0,
+                    type: 'polyline',
+                    path: directions.polyline,
+                  }] : [])
+                ]}
+                center={busStatus ? { lat: busStatus.mlat, lng: busStatus.mlng } : undefined}
+                height="100%"
+                width="100%"
+                showTrafficLayer={true}
+              />
+            ) : (
+              <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center bg-[#111317]">
+                {!profile?.assignedBusId && !loading ? (
+                  <div className="glass-card p-8 text-center rounded-[32px] max-w-md mx-6 shadow-2xl backdrop-blur">
+                    <div className="bg-yellow-500/10 border border-yellow-500/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
+                      <Bus className="h-8 w-8 text-yellow-400" />
+                    </div>
+                    <h3 className="text-xl font-bold text-white mb-2">No Bus Assigned</h3>
+                    <p className="text-[#c7c4d7]/80 leading-relaxed text-sm mb-6">
+                      Select a bus to start tracking its real-time location.
+                    </p>
+                    {busPickerOpen ? (
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {uniqueAvailableBuses.length === 0 ? (
+                          <p className="text-xs text-[#c7c4d7]/50">No buses available. Please contact your coordinator.</p>
+                        ) : (
+                          uniqueAvailableBuses.map((bus) => (
+                            <button
+                              key={bus.busId}
+                              onClick={() => handleParentAssignBus(bus.busId)}
+                              disabled={assigningBus}
+                              className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-white/5 hover:bg-[#5e5ce6]/20 border border-white/10 hover:border-[#5e5ce6]/30 transition-all text-left disabled:opacity-50"
+                            >
+                              <div>
+                                <p className="text-sm font-semibold text-white">{bus.busId}</p>
+                                {bus.plateNumber && bus.plateNumber !== bus.busId && (
+                                  <p className="text-[10px] text-[#c7c4d7]/60">{bus.plateNumber}</p>
+                                )}
+                              </div>
+                              <Bus className="h-4 w-4 text-[#5e5ce6]" />
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => { loadAvailableBuses(); setBusPickerOpen(true) }}
+                        className="px-6 py-3 rounded-xl bg-[#5e5ce6] text-white font-semibold text-sm hover:brightness-110 transition-all active:scale-95"
+                      >
+                        Select Your Bus
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="glass-card p-8 text-center rounded-[32px] max-w-md mx-6 shadow-2xl backdrop-blur flex flex-col items-center justify-center">
+                    <div className="bg-[#5e5ce6]/10 border border-[#5e5ce6]/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
+                      <MapPin className="h-8 w-8 text-[#5e5ce6]" />
+                    </div>
+                    <p className="text-sm font-bold text-white uppercase tracking-wider mb-2">Establishing Connection</p>
+                    <p className="text-xs text-[#c7c4d7]/60 mb-6 leading-relaxed">
+                      Waiting for vehicle telemetry signals for bus <span className="font-mono text-[#c2c1ff]">{profile?.assignedBusId}</span>...
+                    </p>
+                    
+                    <div className="pt-4 border-t border-white/5 w-full">
+                      {busPickerOpen ? (
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                          {uniqueAvailableBuses.length === 0 ? (
+                            <p className="text-xs text-[#c7c4d7]/50">No buses available. Please contact your coordinator.</p>
+                          ) : (
+                            uniqueAvailableBuses.map((bus) => (
+                              <button
+                                key={bus.busId}
+                                onClick={() => handleParentAssignBus(bus.busId)}
+                                disabled={assigningBus}
+                                className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-white/5 hover:bg-[#5e5ce6]/20 border border-white/10 hover:border-[#5e5ce6]/30 transition-all text-left disabled:opacity-50"
+                              >
+                                <div>
+                                  <p className="text-sm font-semibold text-white">{bus.busId}</p>
+                                  {bus.plateNumber && bus.plateNumber !== bus.busId && (
+                                    <p className="text-[10px] text-[#c7c4d7]/60">{bus.plateNumber}</p>
+                                  )}
+                                </div>
+                                <Bus className="h-4 w-4 text-[#5e5ce6]" />
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => { loadAvailableBuses(); setBusPickerOpen(true) }}
+                          className="px-6 py-2.5 rounded-xl bg-[#5e5ce6] text-white font-semibold text-xs hover:brightness-110 transition-all active:scale-95"
+                        >
+                          Change Assigned Bus
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
-
-              {/* STATS BENTO */}
-              <div className="grid grid-cols-2 gap-2">
-                <div className="bg-white/5 rounded-xl p-3 flex flex-col gap-1 border border-white/5">
-                  <Users className="h-4 w-4 text-[#5e5ce6]" />
-                  <span className="text-[10px] text-[#c7c4d7]">Passengers</span>
-                  <span className="text-sm font-semibold text-white">{passengerCount > 0 ? `${passengerCount} Onboard` : '0 Onboard'}</span>
-                </div>
-                <div className="bg-white/5 rounded-xl p-3 flex flex-col gap-1 border border-white/5">
-                  <Activity className="h-4 w-4 text-[#5e5ce6]" />
-                  <span className="text-[10px] text-[#c7c4d7]">Status</span>
-                  <span className="text-sm font-semibold text-white">{busStatus.online ? "Transit" : "Parked"}</span>
-                </div>
-              </div>
-
-              {/* NEXT STOP */}
-              <div className="bg-white/5 rounded-xl p-3 border border-white/5">
-                <div className="flex items-center gap-2 mb-2">
-                  <MapPin className="h-4 w-4 text-[#5e5ce6]" />
-                  <span className="text-xs font-semibold text-white">Next Target Stop</span>
-                </div>
-                <p className="text-xs text-[#c7c4d7] truncate">{nextStop?.name || "Depot Gateway"}</p>
-                <div className="mt-3 w-full bg-white/10 h-1.5 rounded-full overflow-hidden">
-                  <div className="h-full bg-[#5e5ce6] shadow-[0_0_10px_rgba(94,92,230,0.5)] transition-all duration-500" style={{ width: `${progressPercent}%` }}></div>
-                </div>
-              </div>
-
-              {/* ROUTE TOGGLE */}
-              <div className="flex items-center justify-between px-1">
-                <div className="flex items-center gap-2">
-                  <Navigation className="h-4 w-4 text-[#c7c4d7]" />
-                  <span className="text-xs text-white">Show Optimal Path</span>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    checked={showRoutePath}
-                    onChange={(e) => setShowRoutePath(e.target.checked)}
-                    className="sr-only peer" 
-                  />
-                  <div className="w-11 h-6 bg-[#333539] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#5e5ce6] active-glow"></div>
-                </label>
-              </div>
-
-              {busPickerOpen && (
-                <div className="rounded-xl bg-[#1a1c1f] border border-white/10 p-3 space-y-1.5">
-                  <p className="text-[10px] text-[#c7c4d7]/60 uppercase tracking-wider font-semibold mb-2">Select a different bus</p>
-                  <div className="max-h-32 overflow-y-auto space-y-1">
-                    {availableBuses.map((bus) => (
-                      <button
-                        key={bus.busId}
-                        onClick={() => handleParentAssignBus(bus.busId)}
-                        disabled={assigningBus || bus.busId === profile?.assignedBusId}
-                        className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all text-left ${
-                          bus.busId === profile?.assignedBusId
-                            ? 'bg-[#5e5ce6]/20 text-[#c2c1ff] border border-[#5e5ce6]/30'
-                            : 'bg-white/5 hover:bg-[#5e5ce6]/10 text-white border border-white/5 hover:border-[#5e5ce6]/20'
-                        } disabled:opacity-50`}
-                      >
-                        <span className="font-mono">{bus.busId}</span>
-                        {bus.busId === profile?.assignedBusId && <span className="text-[9px]">Active</span>}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <button 
-                onClick={handleRefresh}
-                className="w-full py-2.5 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-semibold border border-white/5 transition-all flex items-center justify-center gap-2"
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-                Trigger Telemetry Update
-              </button>
-            </div>
+            )}
           </div>
-        )}
 
-        {/* RECENT ALERTS (Floating Right - Desktop Only) */}
-        {profile?.assignedBusId && busStatus && (
-          <div className="absolute right-4 bottom-4 z-20 hidden lg:block w-72 pointer-events-none">
-            <div className="glass-card rounded-2xl p-4 pointer-events-auto backdrop-blur">
-              <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-1">
-                <span className="font-semibold text-white text-xs">Command Alerts</span>
-                <Clock className="h-4 w-4 text-[#5e5ce6]" />
+          {/* FLOATING CONTROL PANEL */}
+          {profile?.assignedBusId && busStatus && (
+            <div className="absolute left-4 top-4 bottom-24 md:bottom-4 w-[calc(100%-32px)] md:w-80 z-20 pointer-events-none flex flex-col gap-4 max-h-[calc(100%-110px)] overflow-y-auto pr-1">
+              <div className="glass-card rounded-2xl p-4 pointer-events-auto flex flex-col gap-4 backdrop-blur">
+                {/* STATUS HEADER */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-3 h-3 rounded-full ${busStatus.online ? 'bg-green-400 pulse-indicator' : 'bg-gray-500'}`}></span>
+                    <span className="font-semibold text-white text-sm">
+                      {busData?.plateNumber || busStatus.nm} - {busStatus.online ? 'Active' : 'Offline'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] bg-white/5 px-2 py-1 rounded-lg text-[#c7c4d7] border border-white/5 font-mono">
+                      {profile.assignedBusId}
+                    </span>
+                    <button
+                      onClick={() => { loadAvailableBuses(); setBusPickerOpen(!busPickerOpen) }}
+                      className="text-[10px] px-2 py-1 rounded-lg text-[#c7c4d7]/50 hover:text-[#c2c1ff] hover:bg-[#5e5ce6]/10 transition-all"
+                      title="Change bus"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                {/* ETA CARD */}
+                <div className="bg-[#5e5ce6]/95 rounded-xl p-4 shadow-lg flex flex-col items-center text-center text-white">
+                  <span className="text-[10px] text-white/75 uppercase tracking-widest mb-1">Estimated Arrival</span>
+                  <span className="text-2xl font-bold mb-2">{directions?.duration || "Calculating..."}</span>
+                  {directions?.distance && (
+                    <div className="flex items-center gap-1.5 text-white/90 text-xs">
+                      <Navigation className="h-3.5 w-3.5" />
+                      <span>{directions.distance} away</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* STATS BENTO */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-white/5 rounded-xl p-3 flex flex-col gap-1 border border-white/5">
+                    <Users className="h-4 w-4 text-[#5e5ce6]" />
+                    <span className="text-[10px] text-[#c7c4d7]">Passengers</span>
+                    <span className="text-sm font-semibold text-white">{passengerCount > 0 ? `${passengerCount} Onboard` : '0 Onboard'}</span>
+                  </div>
+                  <div className="bg-white/5 rounded-xl p-3 flex flex-col gap-1 border border-white/5">
+                    <Activity className="h-4 w-4 text-[#5e5ce6]" />
+                    <span className="text-[10px] text-[#c7c4d7]">Status</span>
+                    <span className="text-sm font-semibold text-white">{busStatus.online ? "Transit" : "Parked"}</span>
+                  </div>
+                </div>
+
+                {/* NEXT STOP */}
+                <div className="bg-white/5 rounded-xl p-3 border border-white/5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <MapPin className="h-4 w-4 text-[#5e5ce6]" />
+                    <span className="text-xs font-semibold text-white">Next Target Stop</span>
+                  </div>
+                  <p className="text-xs text-[#c7c4d7] truncate">{nextStop?.name || "Depot Gateway"}</p>
+                  <div className="mt-3 w-full bg-white/10 h-1.5 rounded-full overflow-hidden">
+                    <div className="h-full bg-[#5e5ce6] shadow-[0_0_10px_rgba(94,92,230,0.5)] transition-all duration-500" style={{ width: `${progressPercent}%` }}></div>
+                  </div>
+                </div>
+
+                {/* ROUTE TOGGLE */}
+                <div className="flex items-center justify-between px-1">
+                  <div className="flex items-center gap-2">
+                    <Navigation className="h-4 w-4 text-[#c7c4d7]" />
+                    <span className="text-xs text-white">Show Optimal Path</span>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={showRoutePath}
+                      onChange={(e) => setShowRoutePath(e.target.checked)}
+                      className="sr-only peer" 
+                    />
+                    <div className="w-11 h-6 bg-[#333539] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#5e5ce6] active-glow"></div>
+                  </label>
+                </div>
+
+                {busPickerOpen && (
+                  <div className="rounded-xl bg-[#1a1c1f] border border-white/10 p-3 space-y-1.5">
+                    <p className="text-[10px] text-[#c7c4d7]/60 uppercase tracking-wider font-semibold mb-2">Select a different bus</p>
+                    <div className="max-h-32 overflow-y-auto space-y-1">
+                      {uniqueAvailableBuses.map((bus) => (
+                        <button
+                          key={bus.busId}
+                          onClick={() => handleParentAssignBus(bus.busId)}
+                          disabled={assigningBus || bus.busId === profile?.assignedBusId}
+                          className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs transition-all text-left ${
+                            bus.busId === profile?.assignedBusId
+                              ? 'bg-[#5e5ce6]/20 text-[#c2c1ff] border border-[#5e5ce6]/30'
+                              : 'bg-white/5 hover:bg-[#5e5ce6]/10 text-white border border-white/5 hover:border-[#5e5ce6]/20'
+                          } disabled:opacity-50`}
+                        >
+                          <span className="font-mono">{bus.busId}</span>
+                          {bus.busId === profile?.assignedBusId && <span className="text-[9px]">Active</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <button 
+                  onClick={handleRefresh}
+                  className="w-full py-2.5 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-semibold border border-white/5 transition-all flex items-center justify-center gap-2"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Trigger Telemetry Update
+                </button>
               </div>
-              <div className="space-y-3">
-                <div className="flex gap-2">
-                  <div className="w-1 bg-[#5e5ce6] rounded-full"></div>
-                  <div>
-                    <p className="text-xs text-white">WebSocket connection online</p>
-                    <p className="text-[9px] text-[#c7c4d7] uppercase font-mono">Real-time Telemetry</p>
-                  </div>
+            </div>
+          )}
+
+          {/* RECENT ALERTS (Floating Right - Desktop Only) */}
+          {profile?.assignedBusId && busStatus && (
+            <div className="absolute right-4 bottom-4 z-20 hidden lg:block w-72 pointer-events-none">
+              <div className="glass-card rounded-2xl p-4 pointer-events-auto backdrop-blur">
+                <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-1">
+                  <span className="font-semibold text-white text-xs">Command Alerts</span>
+                  <Clock className="h-4 w-4 text-[#5e5ce6]" />
                 </div>
-                <div className="flex gap-2">
-                  <div className="w-1 bg-green-500 rounded-full"></div>
-                  <div>
-                    <p className="text-xs text-white">Bus location synchronized</p>
-                    <p className="text-[9px] text-[#c7c4d7] uppercase font-mono">{lastUpdate ? lastUpdate.toLocaleTimeString() : "Synchronized"}</p>
-                  </div>
-                </div>
-                {busStatus.online && (
+                <div className="space-y-3">
                   <div className="flex gap-2">
                     <div className="w-1 bg-[#5e5ce6] rounded-full"></div>
                     <div>
-                      <p className="text-xs text-white">Transmitting coordinates</p>
-                      <p className="text-[9px] text-[#c7c4d7] uppercase font-mono">{busStatus.mlat.toFixed(4)}, {busStatus.mlng.toFixed(4)}</p>
+                      <p className="text-xs text-white">WebSocket connection online</p>
+                      <p className="text-[9px] text-[#c7c4d7] uppercase font-mono">Real-time Telemetry</p>
                     </div>
                   </div>
-                )}
+                  <div className="flex gap-2">
+                    <div className="w-1 bg-green-500 rounded-full"></div>
+                    <div>
+                      <p className="text-xs text-white">Bus location synchronized</p>
+                      <p className="text-[9px] text-[#c7c4d7] uppercase font-mono">{lastUpdate ? lastUpdate.toLocaleTimeString() : "Synchronized"}</p>
+                    </div>
+                  </div>
+                  {busStatus.online && (
+                    <div className="flex gap-2">
+                      <div className="w-1 bg-[#5e5ce6] rounded-full"></div>
+                      <div>
+                        <p className="text-xs text-white">Transmitting coordinates</p>
+                        <p className="text-[9px] text-[#c7c4d7] uppercase font-mono">{busStatus.mlat.toFixed(4)}, {busStatus.mlng.toFixed(4)}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </main>
 
       {/* BOTTOM NAVIGATION (Mobile Only) */}
