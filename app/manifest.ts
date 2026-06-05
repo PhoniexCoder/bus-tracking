@@ -4,7 +4,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "Bus Tracker - Real-time Bus Tracking System",
     short_name: "BusTracker",
-    description: "Real-time bus tracking for students, drivers, and administrators",
+    description: "Real-time bus tracking for students and administrators",
     start_url: "/",
     display: "standalone",
     background_color: "#ffffff",

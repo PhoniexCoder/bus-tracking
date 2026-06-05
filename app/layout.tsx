@@ -9,7 +9,7 @@ const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
   title: "Bus Tracker - Real-time Bus Tracking",
-  description: "Real-time bus tracking for students, drivers, and administrators",
+  description: "Real-time bus tracking for students and administrators",
   manifest: "/manifest.json",
   icons: {
     apple: "/icon-192x192.png",
