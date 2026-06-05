@@ -1,9 +1,10 @@
 import type React from "react"
 import type { Metadata, Viewport } from "next"
-import { Inter } from "next/font/google"
+import { Inter, Outfit } from "next/font/google"
 import "./globals.css"
 import { AuthProvider } from "@/contexts/auth-context"
 
+const outfit = Outfit({ subsets: ["latin"], weight: ["300", "400", "500", "600", "700"] })
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
@@ -35,12 +36,12 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
+        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
         <script
           async
-          defer
-          src={`https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=geometry`}
+          src={`https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=geometry,marker&loading=async`}
         ></script>
         <script
           dangerouslySetInnerHTML={{
@@ -60,7 +61,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className={inter.className}>
+      <body className={outfit.className}>
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>

@@ -1,68 +1,30 @@
-"""
-JWT Authentication Module for Bus Tracking API
-"""
 import os
+import time
+import threading
 from datetime import datetime, timedelta
 from typing import Optional
+
 from jose import JWTError, jwt
 import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from dotenv import load_dotenv
 
-load_dotenv()
+from config import JWT_SECRET_KEY, JWT_ALGORITHM, JWT_ACCESS_TOKEN_EXPIRE_MINUTES, LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW
 
-# JWT Configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY")
-ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
-
-# HTTP Bearer token scheme
 security = HTTPBearer()
 
-# Validate JWT configuration
-if not SECRET_KEY or len(SECRET_KEY) < 32:
-    raise ValueError("JWT_SECRET_KEY must be set and at least 32 characters long in .env file")
+# ── JWT ─────────────────────────────────────────────────────────────
 
-
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    """
-    Create a JWT access token.
-    
-    Args:
-        data: Dictionary containing token payload data
-        expires_delta: Optional custom expiration time
-        
-    Returns:
-        Encoded JWT token string
-    """
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    return jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
 def verify_token(token: str) -> dict:
-    """
-    Verify and decode a JWT token.
-    
-    Args:
-        token: JWT token string
-        
-    Returns:
-        Decoded token payload
-        
-    Raises:
-        HTTPException: If token is invalid or expired
-    """
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
+        return jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
     except JWTError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -72,84 +34,51 @@ def verify_token(token: str) -> dict:
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-    """
-    Dependency to get the current authenticated user from the JWT token.
-    
-    Args:
-        credentials: HTTP Authorization credentials with Bearer token
-        
-    Returns:
-        Dictionary containing user information from token payload
-        
-    Raises:
-        HTTPException: If authentication fails
-    """
-    token = credentials.credentials
-    payload = verify_token(token)
-    
-    username: str = payload.get("sub")
-    if username is None:
+    payload = verify_token(credentials.credentials)
+    if payload.get("sub") is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
     return payload
 
 
 async def get_current_admin_user(current_user: dict = Depends(get_current_user)) -> dict:
-    """
-    Dependency to ensure the current user is an admin.
-    
-    Args:
-        current_user: Current authenticated user from get_current_user
-        
-    Returns:
-        User dictionary if user is admin
-        
-    Raises:
-        HTTPException: If user is not an admin
-    """
     if current_user.get("role") != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
+            detail="Admin access required",
         )
     return current_user
 
+# ── Password Hashing ─────────────────────────────────────────────────
 
 def hash_password(password: str) -> str:
-    """
-    Hash a password using bcrypt.
-    
-    Args:
-        password: Plain text password
-        
-    Returns:
-        Hashed password string
-    """
-    password_bytes = password.encode('utf-8')
+    password_bytes = password.encode("utf-8")
     salt = bcrypt.gensalt(rounds=12)
-    hashed = bcrypt.hashpw(password_bytes, salt)
-    return hashed.decode('utf-8')
+    return bcrypt.hashpw(password_bytes, salt).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Verify a password against its hash.
-    
-    Args:
-        plain_password: Plain text password to verify
-        hashed_password: Hashed password to compare against
-        
-    Returns:
-        True if password matches, False otherwise
-    """
     try:
-        password_bytes = plain_password.encode('utf-8')
-        hashed_bytes = hashed_password.encode('utf-8')
-        return bcrypt.checkpw(password_bytes, hashed_bytes)
+        return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
     except Exception as e:
         print(f"Password verification error: {e}")
+        return False
+
+# ── Rate Limiting ────────────────────────────────────────────────────
+
+_login_attempts: dict[str, list[float]] = {}
+_login_lock = threading.Lock()
+
+
+def check_login_rate_limit(ip: str) -> bool:
+    now = time.time()
+    with _login_lock:
+        attempts = [t for t in _login_attempts.get(ip, []) if now - t < LOGIN_RATE_WINDOW]
+        if len(attempts) >= LOGIN_RATE_LIMIT:
+            return True
+        attempts.append(now)
+        _login_attempts[ip] = attempts
         return False

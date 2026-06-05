@@ -19,12 +19,12 @@ def test_login():
     
     if response.status_code == 200:
         data = response.json()
-        print("✅ Login successful!")
+        print("[OK] Login successful!")
         print(f"Access Token: {data['access_token'][:50]}...")
         print(f"User: {data['user']}")
         return data['access_token']
     else:
-        print(f"❌ Login failed: {response.status_code}")
+        print(f"[ERR] Login failed: {response.status_code}")
         print(response.text)
         return None
 
@@ -37,12 +37,12 @@ def test_protected_endpoint(token):
     
     if response.status_code == 200:
         data = response.json()
-        print("✅ Successfully accessed protected endpoint!")
+        print("[OK] Successfully accessed protected endpoint!")
         print(f"Devices: {list(data.keys())}")
         for device_id, info in data.items():
             print(f"  - {device_id}: Online={info['online']}, Lat={info['latitude']}, Lng={info['longitude']}")
     else:
-        print(f"❌ Failed to access protected endpoint: {response.status_code}")
+        print(f"[ERR] Failed to access protected endpoint: {response.status_code}")
         print(response.text)
 
 def test_without_token():
@@ -52,7 +52,7 @@ def test_without_token():
     response = requests.get(f"{BASE_URL}/api/live")
     
     if response.status_code == 403:
-        print("✅ Correctly rejected request without token")
+        print("[OK] Correctly rejected request without token")
         print(f"Status: {response.status_code}")
     else:
         print(f"⚠️ Unexpected response: {response.status_code}")
@@ -68,7 +68,7 @@ def test_invalid_credentials():
     )
     
     if response.status_code == 401:
-        print("✅ Correctly rejected invalid credentials")
+        print("[OK] Correctly rejected invalid credentials")
         print(f"Status: {response.status_code}")
     else:
         print(f"⚠️ Unexpected response: {response.status_code}")
@@ -82,13 +82,13 @@ def test_user_info(token):
     
     if response.status_code == 200:
         data = response.json()
-        print("✅ Successfully retrieved user info!")
+        print("[OK] Successfully retrieved user info!")
         print(f"User Info: {json.dumps(data, indent=2)}")
     else:
         print(f"❌ Failed: {response.status_code}")
 
 if __name__ == "__main__":
-    print("🧪 JWT Authentication Test Suite")
+    print("JWT Authentication Test Suite")
     print("=" * 60)
     
     # Test 1: Invalid credentials
@@ -108,8 +108,6 @@ if __name__ == "__main__":
         test_user_info(token)
     
     print("\n" + "=" * 60)
-    print("✨ Test suite completed!")
+    print("Test suite completed!")
     print("\nDefault credentials:")
-    print("  - admin/admin123 (full access)")
-    print("  - driver/driver123 (driver access)")
-    print("  - parent/parent123 (parent access)")
+    print("  - admin/admin123 (configured via ADMIN_USERNAME/ADMIN_PASSWORD env vars)")

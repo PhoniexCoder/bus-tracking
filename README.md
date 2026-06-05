@@ -1,147 +1,66 @@
 # Bus Tracker PWA
 
-A production-ready Progressive Web Application for real-time bus tracking with student and admin dashboards.
+A production-ready Progressive Web Application for real-time bus tracking with admin and parent dashboards. Authenticated via ERP SSO (RS256 JWT redirect) with a Firebase Auth fallback.
 
 ## Features
 
-- 🚌 Real-time bus tracking using fleet.lagaam.in APIs
-- 📱 Progressive Web App with offline capabilities
-- 🔐 Authentication (Student, Admin)
-- 🗺️ Google Maps integration for location services
-- 🔥 Firebase Firestore for data storage
-- 📊 Real-time dashboard updates
-- 📱 Fully responsive design
-
-## Environment Setup
-
-### Required Environment Variables
-
-Create a `.env.local` file in the root directory with the following variables:
-
-\`\`\`bash
-# Firebase Configuration
-NEXT_PUBLIC_FIREBASE_API_KEY=your_firebase_api_key_here
-NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
-NEXT_PUBLIC_FIREBASE_PROJECT_ID=your_project_id
-NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your_project.appspot.com
-NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=123456789
-NEXT_PUBLIC_FIREBASE_APP_ID=your_firebase_app_id
-
-# Google Maps API Key
-NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
-
-# Fleet API Configuration
-NEXT_PUBLIC_FLEET_API_BASE_URL=https://fleet.lagaam.in
-
-# App Configuration
-NEXT_PUBLIC_APP_ID=bus_tracker_app
-NEXT_PUBLIC_APP_NAME=Bus Tracker
-
-# Firebase Auth Token (optional)
-NEXT_PUBLIC_INITIAL_AUTH_TOKEN=your_initial_auth_token_here
-\`\`\`
-
-### API Keys Setup
-
-#### 1. Firebase Setup
-1. Go to [Firebase Console](https://console.firebase.google.com/)
-2. Create a new project or select existing one
-3. Enable Authentication and Firestore
-4. Get your config from Project Settings > General > Your apps
-5. Set up Firestore security rules:
-
-\`\`\`javascript
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    // Private user data
-    match /artifacts/{appId}/users/{userId}/{path=**} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-    
-    // Unauthenticated access for server-side caching
-    match /artifacts/{appId}/public/data/fleetCache/{document=**} {
-      allow read, write: if true;
-    }
-
-    // Public shared data
-    match /artifacts/{appId}/public/data/{path=**} {
-      allow read, write: if request.auth != null;
-    }
-  }
-}
-\`\`\`
-
-#### 2. Google Maps API Setup
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Enable the following APIs:
-   - Maps JavaScript API
-   - Directions API
-   - Geocoding API
-3. Create an API key and restrict it to your domain
-4. Add the API key to your environment variables
-
-#### 3. Fleet API Access
-- Ensure you have valid credentials for fleet.lagaam.in
-- The base URL is already configured in the environment
-
-## Installation
-
-1. Clone the repository
-2. Install dependencies:
-   \`\`\`bash
-   npm install
-   \`\`\`
-3. Copy `.env.example` to `.env.local` and fill in your API keys
-4. Run the development server:
-   \`\`\`bash
-   npm run dev
-   \`\`\`
-
-## Demo Credentials
-
-For testing purposes, you can use these demo credentials:
-
-- **Student**: ID: `student123`, Password: `demo123`
-- **Admin**: Username: `admin123`, Password: `demo123`
-
-## Deployment
-
-### Vercel Deployment
-1. Connect your repository to Vercel
-2. Add all environment variables in Vercel dashboard
-3. Deploy
-
-### Environment Variables in Production
-Make sure to set all required environment variables in your production environment. The app will validate required variables on startup.
-
-## Security Notes
-
-- All API keys are stored as environment variables
-- Firebase security rules restrict data access
-- Authentication tokens are managed securely
-- No sensitive data is exposed in client-side code
-
-## PWA Features
-
-- Installable on mobile devices
-- Offline functionality with service worker
-- Push notifications ready (can be extended)
-- App-like experience with proper manifest
+- Real-time bus tracking using fleet.lagaam.in APIs
+- ERP Single Sign-On (RS256 JWT via URL redirect)
+- Firebase Firestore for data storage
+- Google Maps integration with live bus markers
+- WebSocket real-time dashboard updates
+- Progressive Web App with offline capabilities
+- Role-based dashboards (Admin, Parent)
+- CSP, HSTS, and Permissions-Policy security headers
 
 ## Architecture
 
 - **Frontend**: Next.js 14 with App Router
-- **Styling**: Tailwind CSS with shadcn/ui components
+- **Backend**: FastAPI (Python) — fleet API proxy + WebSocket broadcast
+- **Auth**: ERP SSO (RS256 JWT) / Firebase Auth fallback
 - **Database**: Firebase Firestore
-- **Authentication**: Firebase Auth + fleet.lagaam.in integration
 - **Maps**: Google Maps JavaScript API
-- **Real-time Updates**: Firestore listeners + API polling
+- **Real-time**: WebSocket broadcast every 5s
 
-## Support
+## Quick Start
 
-For issues or questions, please check the documentation or create an issue in the repository.
-\`\`\`
+```
+cp .env.example .env.local          # configure all vars
+cp backend/.env.example backend/.env # configure fleet credentials
+pnpm install
+pnpm dev                             # frontend :3000
+cd backend && python app.py          # backend  :8000
+```
+
+See [QUICK_START.md](./QUICK_START.md) for detailed setup.
+
+## Key Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `ERP_SSO_PUBLIC_KEY` | ERP RS256 public key for JWT validation |
+| `SESSION_SECRET` | Secret for signing local session cookies |
+| `PROXY_ALLOWED_DOMAINS` | Domains the CORS proxy may forward to |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Firebase Admin SDK credentials (server-side) |
+| `BACKEND_API_USERNAME/PASSWORD` | Backend API credentials (server-side) |
+| `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` | Google Maps JS API key |
+
+See [.env.local.example](./.env.local.example) for the complete list.
+
+## Auth Flow
+
+1. **ERP SSO (primary)**: ERP redirects user to `/api/auth/sso?token=<RS256_JWT>`, the endpoint validates the JWT, sets an httpOnly `bus_session` cookie, and redirects to the role-based dashboard.
+2. **Fallback login**: `/login` page uses Firebase `signInWithEmailAndPassword`, then bridges to the same session cookie via `/api/auth/login`.
+3. All protected pages and API routes check the `bus_session` cookie. Logout clears the cookie.
+
+## Security
+
+- All security headers set in middleware (CSP, HSTS, X-Frame-Options, Permissions-Policy, etc.)
+- CORS proxy restricted to `PROXY_ALLOWED_DOMAINS` allowlist
+- Backend CORS defaults to restrictive origins in production
+- WebSocket endpoint validates Origin header against allowlist
+- No hardcoded credentials; all secrets from env vars
+- CSP overridable via `CSP_HEADER` env var
 
 Now let's delete the old individual login pages since we have a unified login:
 

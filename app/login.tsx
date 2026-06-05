@@ -1,22 +1,13 @@
 "use client"
 
 import type React from "react"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
-import Link from "next/link"
 import { useAuth } from "@/contexts/auth-context"
-import { useEffect } from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Badge } from "@/components/ui/badge"
-import { UserCheck, Shield, Eye, EyeOff, LogIn } from "lucide-react"
 import { Timestamp } from "firebase/firestore"
 import { FirestoreService } from "@/lib/firestore"
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, type User } from "firebase/auth"
+import { signInWithEmailAndPassword, type User } from "firebase/auth"
 import { auth } from "@/lib/firebase"
 import { config } from "@/lib/config"
 
@@ -31,9 +22,8 @@ export default function LoginPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
-  // Login form state
   const [formData, setFormData] = useState<LoginFormData>({
-    userType: "",
+    userType: "parent",
     username: "",
     password: "",
   })
@@ -41,6 +31,7 @@ export default function LoginPage() {
   const [loginLoading, setLoginLoading] = useState(false)
   const [error, setError] = useState("")
   const [successMessage, setSuccessMessage] = useState("")
+  const [particles, setParticles] = useState<{ id: number; size: number; left: number; top: number; duration: number; delay: number }[]>([])
 
   useEffect(() => {
     if (!loading && userRole) {
@@ -52,60 +43,27 @@ export default function LoginPage() {
     const message = searchParams.get("message")
     if (message) setSuccessMessage(message)
 
-    // Preselect role from query string, if provided
     const role = searchParams.get("role")
-      if (role === "parent" || role === "admin") {
+    if (role === "parent" || role === "admin") {
       setFormData((prev) => ({ ...prev, userType: role }))
     }
   }, [searchParams])
 
+  useEffect(() => {
+    const list = Array.from({ length: 15 }).map((_, i) => ({
+      id: i,
+      size: Math.random() * 4 + 2,
+      left: Math.random() * 100,
+      top: Math.random() * 100,
+      duration: Math.random() * 10 + 10,
+      delay: Math.random() * -10,
+    }))
+    setParticles(list)
+  }, [])
+
   const handleInputChange = (field: keyof LoginFormData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
-    setError("") // Clear error when user types
-  }
-
-  const getUserTypeIcon = (userType: string) => {
-    switch (userType) {
-      case "parent":
-        return <UserCheck className="h-4 w-4 text-green-600" />
-      case "admin":
-        return <Shield className="h-4 w-4 text-purple-600" />
-      default:
-        return <LogIn className="h-4 w-4 text-gray-600" />
-    }
-  }
-
-  const getButtonColor = (userType: string) => {
-    switch (userType) {
-      case "parent":
-        return "bg-green-600 hover:bg-green-700"
-      case "admin":
-        return "bg-purple-600 hover:bg-purple-700"
-      default:
-        return "bg-gray-600 hover:bg-gray-700"
-    }
-  }
-
-  const getUsernameLabel = (userType: string) => {
-    switch (userType) {
-      case "parent":
-        return "Parent ID"
-      case "admin":
-        return "Admin Username"
-      default:
-        return "Username"
-    }
-  }
-
-  const getUsernamePlaceholder = (userType: string) => {
-    switch (userType) {
-      case "parent":
-        return "Enter your parent ID"
-      case "admin":
-        return "Enter your admin username"
-      default:
-        return "Enter your username"
-    }
+    setError("")
   }
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -124,41 +82,32 @@ export default function LoginPage() {
         return
       }
 
-      let firebaseUser: User | null = user
-
-      // 1. Authenticate using Firebase Auth for both parent and admin
-      // Build a deterministic email for auth using configured Firebase auth domain
+      let firebaseUser: User | null = null
       const authDomain = config.firebase.authDomain || "example.com"
       const fakeEmail = `${username.toLowerCase().trim()}@${authDomain}`
 
       try {
         const userCredential = await signInWithEmailAndPassword(auth, fakeEmail, password)
         firebaseUser = userCredential.user
-      } catch (error: any) {
-        // Special case: Create the first user if they don't exist
-        if (
-          (error.code === "auth/invalid-credential" || error.code === "auth/user-not-found")
-        ) {
-          console.log(`Attempting to create first ${userType} user...`)
-          const userCredential = await createUserWithEmailAndPassword(auth, fakeEmail, password)
-          firebaseUser = userCredential.user
-          setSuccessMessage(`First ${userType} account created successfully! Logging in...`)
-        } else {
-          // Re-throw other errors
-          if (error.code === "auth/invalid-credential") {
-            throw new Error(`Invalid username or password for ${userType}.`)
-          }
-          throw error
+      } catch (err: any) {
+        if (err.code === "auth/user-not-found") {
+          throw new Error(`Account not found for "${username}". Contact an administrator to create your account.`)
         }
+        if (err.code === "auth/invalid-credential") {
+          throw new Error(`Invalid username or password for ${userType}.`)
+        }
+        if (err.code === "auth/too-many-requests") {
+          throw new Error("Too many login attempts. Please try again later.")
+        }
+        throw err
       }
 
       if (!firebaseUser) throw new Error("Authentication session is invalid. Please try again.")
 
-      // 2. Handle Firestore profile creation for first-time users
       const firestoreService = new FirestoreService(firebaseUser.uid)
 
       switch (userType) {
-        case "parent":
+        case "parent": {
           const studentProfile = await firestoreService.getStudentProfile()
           if (!studentProfile) {
             await firestoreService.createStudentProfile({
@@ -170,9 +119,9 @@ export default function LoginPage() {
             })
           }
           break
-        case "admin":
+        }
+        case "admin": {
           const adminProfile = await firestoreService.getAdminProfile()
-          // If the profile doesn't exist (which happens right after the first admin is created), create it.
           if (!adminProfile) {
             await firestoreService.createAdminProfile({
               username,
@@ -181,9 +130,19 @@ export default function LoginPage() {
             })
           }
           break
+        }
       }
 
-      // 3. Set auth context and redirect on successful login
+      const fbIdToken = await firebaseUser.getIdToken()
+      const sessionRes = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idToken: fbIdToken, role: userType }),
+      })
+      if (!sessionRes.ok) {
+        throw new Error("Failed to establish session. Please try again.")
+      }
+
       setUserRole(userType)
       router.push(`/${userType}/dashboard`)
     } catch (err: any) {
@@ -196,151 +155,185 @@ export default function LoginPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      <div className="min-h-screen flex items-center justify-center bg-[#0A0A0B]">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#5e5ce6]"></div>
       </div>
     )
   }
 
   return (
-    <div className="lg:sticky lg:top-8">
-      <Card className="shadow-xl border-2">
-        <CardHeader className="text-center pb-4">
-          <CardTitle className="text-2xl font-bold flex items-center justify-center">
-            <LogIn className="h-6 w-6 mr-2" />
-            Sign In
-          </CardTitle>
-          <CardDescription className="text-base">Access your personalized dashboard</CardDescription>
-        </CardHeader>
+    <div className="relative min-h-screen flex items-center justify-center p-6 overflow-hidden bg-[#0A0A0B] text-[#e2e2e7]">
+      <style dangerouslySetInnerHTML={{ __html: `
+        @keyframes float {
+          0% { transform: translateY(100px) translateX(0); opacity: 0; }
+          50% { opacity: 0.5; }
+          100% { transform: translateY(-100vh) translateX(15px); opacity: 0; }
+        }
+        .floating-label-input label {
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .floating-label-input:focus-within label,
+        .floating-label-input input:not(:placeholder-shown) + label {
+          transform: translateY(-18px) scale(0.85) !important;
+          color: #c2c1ff !important;
+          background-color: #0c0e12;
+          padding: 0 6px;
+        }
+      ` }} />
 
-        <CardContent>
-          <form onSubmit={handleLogin} className="space-y-5">
-            {/* User Type Selection */}
-            <div className="space-y-2">
-              <Label htmlFor="userType">Select Your Role</Label>
-              <Select
-                value={formData.userType}
-                onValueChange={(value) => handleInputChange("userType", value)}
-                required
+      <div className="fixed inset-0 bg-mesh z-0 pointer-events-none"></div>
+      <div className="fixed top-[-10%] left-[-10%] w-[40%] h-[40%] bg-[#5e5ce6]/10 blur-[120px] rounded-full z-0 pointer-events-none"></div>
+      <div className="fixed bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-[#5e5ce6]/5 blur-[120px] rounded-full z-0 pointer-events-none"></div>
+
+      <main className="relative z-10 w-full max-w-[440px]">
+        <header className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[#5e5ce6] shadow-[0_0_30px_rgba(94,92,230,0.4)] mb-4">
+            <span className="material-symbols-outlined text-[#f4f1ff] text-4xl" style={{ fontVariationSettings: "'FILL' 1" }}>directions_bus</span>
+          </div>
+          <h1 className="text-2xl font-bold text-[#c2c1ff] tracking-tight">OmniBus Command</h1>
+          <p className="text-sm text-[#c7c4d7] mt-1">Secure Gateway for Student Safety</p>
+        </header>
+
+        <div className="glass-card rounded-[32px] p-8 md:p-10">
+          <div className="mb-8">
+            <div className="role-track relative flex p-1 rounded-2xl h-12 items-center">
+              <div 
+                className="role-slider absolute top-1 bottom-1 w-[48%] bg-[#5e5ce6] rounded-xl active-role-glow" 
+                style={{ left: formData.userType === "admin" ? "51%" : "1%" }}
+              />
+              <button 
+                type="button"
+                className={`relative z-10 flex-1 text-center text-sm font-medium transition-colors ${formData.userType === "parent" ? "text-[#f4f1ff]" : "text-[#c7c4d7] hover:text-[#e2e2e7]"}`} 
+                onClick={() => handleInputChange("userType", "parent")}
               >
-                <SelectTrigger className="h-12">
-                  <SelectValue placeholder="Choose your role">
-                    {formData.userType && (
-                      <div className="flex items-center">
-                        {getUserTypeIcon(formData.userType)}
-                        <span className="ml-2 capitalize">{formData.userType}</span>
-                      </div>
-                    )}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="parent">
-                    <div className="flex items-center">
-                      <UserCheck className="h-4 w-4 text-green-600 mr-2" />
-                      <div>
-                        <div className="font-medium">Parent</div>
-                        <div className="text-xs text-gray-500">Track bus for your child</div>
-                      </div>
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="admin">
-                    <div className="flex items-center">
-                      <Shield className="h-4 w-4 text-purple-600 mr-2" />
-                      <div>
-                        <div className="font-medium">Admin</div>
-                        <div className="text-xs text-gray-500">Monitor fleet</div>
-                      </div>
-                    </div>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+                Parent / Student
+              </button>
+              <button 
+                type="button"
+                className={`relative z-10 flex-1 text-center text-sm font-medium transition-colors ${formData.userType === "admin" ? "text-[#f4f1ff]" : "text-[#c7c4d7] hover:text-[#e2e2e7]"}`} 
+                onClick={() => handleInputChange("userType", "admin")}
+              >
+                Admin
+              </button>
+            </div>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-6">
+            <div className="floating-label-input relative input-glow border border-[#333539]/40 rounded-xl bg-[#0c0e12]/50 transition-all duration-300">
+              <input 
+                className="block w-full px-4 pt-6 pb-2 bg-transparent border-none focus:ring-0 text-[#e2e2e7] text-base" 
+                id="username" 
+                placeholder=" " 
+                required 
+                type="text"
+                value={formData.username}
+                onChange={(e) => handleInputChange("username", e.target.value)}
+              />
+              <label 
+                className="absolute left-4 top-4 text-[#c7c4d7] text-base transition-all pointer-events-none origin-left" 
+                htmlFor="username"
+              >
+                {formData.userType === "parent" ? "Parent ID / Student ID" : "Admin Username"}
+              </label>
+              <div className="absolute right-4 top-4 text-[#c7c4d7]">
+                <span className="material-symbols-outlined text-xl">account_circle</span>
+              </div>
             </div>
 
-            {/* Username/Student ID Field */}
-            {formData.userType && (
-              <>
-                <div className="space-y-2">
-                  <Label htmlFor="username">{getUsernameLabel(formData.userType)}</Label>
-                  <Input
-                    id="username"
-                    type="text"
-                    value={formData.username}
-                    onChange={(e) => handleInputChange("username", e.target.value)}
-                    placeholder={getUsernamePlaceholder(formData.userType)}
-                    required
-                    className="h-12"
-                  />
-                </div>
+            <div className="floating-label-input relative input-glow border border-[#333539]/40 rounded-xl bg-[#0c0e12]/50 transition-all duration-300">
+              <input 
+                className="block w-full px-4 pt-6 pb-2 bg-transparent border-none focus:ring-0 text-[#e2e2e7] text-base" 
+                id="password" 
+                placeholder=" " 
+                required 
+                type={showPassword ? "text" : "password"}
+                value={formData.password}
+                onChange={(e) => handleInputChange("password", e.target.value)}
+              />
+              <label 
+                className="absolute left-4 top-4 text-[#c7c4d7] text-base transition-all pointer-events-none origin-left" 
+                htmlFor="password"
+              >
+                Password
+              </label>
+              <div 
+                className="absolute right-4 top-4 text-[#c7c4d7] cursor-pointer hover:text-[#c2c1ff] transition-colors" 
+                onClick={() => setShowPassword(!showPassword)}
+              >
+                <span className="material-symbols-outlined text-xl" id="pass-icon">
+                  {showPassword ? "visibility_off" : "visibility"}
+                </span>
+              </div>
+            </div>
 
-                {/* Password Field */}
-                <div className="space-y-2">
-                  <Label htmlFor="password">Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="password"
-                      type={showPassword ? "text" : "password"}
-                      value={formData.password}
-                      onChange={(e) => handleInputChange("password", e.target.value)}
-                      placeholder="Enter your password"
-                      required
-                      className="h-12 pr-10"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                      onClick={() => setShowPassword(!showPassword)}
-                    >
-                      {showPassword ? (
-                        <EyeOff className="h-4 w-4 text-gray-400" />
-                      ) : (
-                        <Eye className="h-4 w-4 text-gray-400" />
-                      )}
-                    </Button>
-                  </div>
-                </div>
+            <div className="flex items-center justify-between px-1">
+              <label className="flex items-center cursor-pointer group">
+                <input 
+                  className="w-5 h-5 rounded border-[#333539] bg-[#1e2023] text-[#5e5ce6] focus:ring-[#5e5ce6] focus:ring-offset-[#0A0A0B]" 
+                  type="checkbox"
+                />
+                <span className="ml-2 text-sm text-[#c7c4d7] group-hover:text-[#e2e2e7] transition-colors">Remember me</span>
+              </label>
+              <a className="text-sm text-[#5e5ce6] hover:text-[#c2c1ff] transition-colors underline-offset-4 hover:underline" href="#">Forgot Password?</a>
+            </div>
 
-                {/* Login Button */}
-                <Button
-                  type="submit"
-                  className={`w-full h-12 ${getButtonColor(formData.userType)}`}
-                  disabled={loginLoading || !formData.userType}
-                >
-                  {loginLoading ? (
-                    <div className="flex items-center">
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      Signing in...
-                    </div>
-                  ) : (
-                    <div className="flex items-center">
-                      {getUserTypeIcon(formData.userType)}
-                      <span className="ml-2">Sign In as {formData.userType}</span>
-                    </div>
-                  )}
-                </Button>
-              </>
+            {error && (
+              <Alert variant="destructive" className="bg-red-950/40 border-red-500/30 text-red-400 rounded-xl">
+                <AlertDescription className="font-semibold text-center text-xs">{error}</AlertDescription>
+              </Alert>
             )}
+            {successMessage && (
+              <Alert variant="default" className="bg-green-950/40 border-green-500/30 text-green-400 rounded-xl">
+                <AlertDescription className="font-semibold text-center text-xs">{successMessage}</AlertDescription>
+              </Alert>
+            )}
+
+            <button 
+              className="w-full h-14 bg-[#5e5ce6] text-[#f4f1ff] text-lg font-semibold rounded-2xl shadow-[0_8px_20px_rgba(94,92,230,0.3)] hover:shadow-[0_12px_24px_rgba(94,92,230,0.5)] hover:-translate-y-0.5 active:translate-y-0 transition-all duration-300 flex items-center justify-center" 
+              type="submit"
+              disabled={loginLoading}
+            >
+              {loginLoading ? (
+                <div className="flex items-center gap-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-t-transparent border-white" />
+                  <span>Securing session...</span>
+                </div>
+              ) : (
+                <span>Login</span>
+              )}
+            </button>
           </form>
 
-          {error && (
-            <Alert variant="destructive" className="mt-4">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
+          <footer className="mt-8 text-center">
+            <p className="text-sm text-[#c7c4d7]">
+              New to the system?{" "}
+              <a className="text-[#c2c1ff] font-semibold hover:underline underline-offset-4" href="#">Request Access</a>
+            </p>
+          </footer>
+        </div>
 
-          {successMessage && (
-            <Alert variant="default" className="mt-4 bg-green-50 border-green-200 text-green-800">
-              <AlertDescription>{successMessage}</AlertDescription>
-            </Alert>
-          )}
+        <div className="mt-8 flex items-center justify-center gap-2 opacity-50">
+          <span className="material-symbols-outlined text-sm">lock</span>
+          <span className="text-xs uppercase tracking-widest">End-to-End Encrypted Session</span>
+        </div>
+      </main>
 
-          <div className="mt-4 text-center text-xs text-gray-500 space-y-1">
-            <p>User ID: {user?.uid || "Not authenticated"}</p>
-            <p>Environment: {process.env.NODE_ENV}</p>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="fixed inset-0 pointer-events-none z-5">
+        {particles.map((p) => (
+          <div
+            key={p.id}
+            className="absolute bg-[#c2c1ff]/10 rounded-full blur-[1px]"
+            style={{
+              width: `${p.size}px`,
+              height: `${p.size}px`,
+              left: `${p.left}%`,
+              top: `${p.top}%`,
+              animation: `float ${p.duration}s linear infinite`,
+              animationDelay: `${p.delay}s`,
+            }}
+          />
+        ))}
+      </div>
     </div>
   )
 }

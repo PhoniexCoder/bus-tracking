@@ -1,204 +1,93 @@
-# 🚀 Quick Start Guide - Bus Tracking PWA
+# Quick Start Guide - Bus Tracking PWA
 
 ## Prerequisites
 
-- **Node.js** 18+ (for frontend)
-- **Python** 3.10+ (for backend)
-- **pnpm** or **npm** (package manager)
-- **Git** (version control)
+- **Node.js** 18+
+- **Python** 3.10+
+- **pnpm** or **npm**
+- **Git**
 
-## 🏃‍♂️ Getting Started (5 Minutes)
+## Getting Started
 
-### 1. Clone the Repository
+### 1. Clone & Install
 
 ```bash
-git clone <your-repo-url>
+git clone <repo-url>
 cd bus-tracking-pwa
+pnpm install
+cd backend && pip install -r requirements.txt && cd ..
 ```
 
-### 2. Set Up Environment Variables
+### 2. Configure Environment
 
 ```bash
-# Copy the example file
+# Frontend — copy and edit all vars
 cp .env.example .env.local
+# Required: ERP_SSO_PUBLIC_KEY, SESSION_SECRET, NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
+# Required: FIREBASE_SERVICE_ACCOUNT_JSON, BACKEND_API_USERNAME, BACKEND_API_PASSWORD
 
-# Edit .env.local with your credentials
-# - Firebase API keys
-# - Google Maps API key
-# - Fleet API credentials
+# Backend — copy and set fleet credentials
+cp backend/.env.example backend/.env
+# Required: FLEET_USERNAME, FLEET_PASSWORD, DEVICE_IDS
 ```
 
-### 3. Start the Backend
+See [.env.local.example](./.env.local.example) for the complete list of frontend variables.
+
+### 3. Start Backend
 
 ```bash
-# Navigate to backend folder
-cd backend
-
-# Install Python dependencies
-pip install -r requirements.txt
-
-# Copy and configure backend environment
-cp .env.example .env
-# Edit .env with your Fleet API credentials
-
-# Start the backend server
-python app.py
+cd backend && python app.py
+# http://localhost:8000
 ```
 
-Backend will start on **http://localhost:8000** ✅
-
-### 4. Start the Frontend
-
-Open a new terminal:
+### 4. Start Frontend
 
 ```bash
-# From project root
-cd bus-tracking-pwa
-
-# Install Node dependencies
-pnpm install
-# or: npm install
-
-# Start development server
-pnpm dev
-# or: npm run dev
+cd bus-tracking-pwa && pnpm dev
+# http://localhost:3000
 ```
 
-Frontend will start on **http://localhost:3000** ✅
+## Auth
 
-### 5. Access the Application
+**Primary**: ERP redirects to `/api/auth/sso?token=<RS256_JWT>`. The app validates the JWT, sets a session cookie, and redirects to the dashboard.
 
-- **Frontend**: http://localhost:3000
-- **Backend API**: http://localhost:8000
-- **API Docs**: http://localhost:8000/docs (FastAPI auto-generated)
+**Fallback**: The `/login` page accepts username/password and authenticates via Firebase Auth, then creates the same session cookie.
 
-## 🔑 Default Login Credentials
+No default/ demo credentials exist. All users are provisioned by the ERP or configured via Firebase Console.
 
-### Admin Login
-- **Username**: `admin123` (or your configured admin ID)
-- **Password**: `password123` (first login creates account)
-- **Role**: Select "Admin"
+## Features
 
-### Parent Login
-- **Username**: `parent123` (or your configured parent ID)
-- **Password**: `password123` (first login creates account)
-- **Role**: Select "Parent"
+| Dashboard | Access | Features |
+|-----------|--------|----------|
+| Admin | `/admin/dashboard` | Fleet map, bus/stop management, camera feeds |
+| Parent | `/parent/dashboard` | Assigned bus tracking, ETA, live location |
 
-## 📱 Features Available
+## Key Config
 
-### Admin Dashboard (`/admin/dashboard`)
-- View all buses on map
-- Real-time GPS tracking
-- Manage bus routes and stops
-- Add/remove buses
-- Access camera feeds (`/admin/cameras`)
+### Frontend (`.env.local`)
 
-### Parent Dashboard (`/parent/dashboard`)
-- Track child's bus in real-time
-- View distance and ETA
-- See bus location on map
-- Auto-refresh every 10 seconds
+| Variable | Notes |
+|----------|-------|
+| `ERP_SSO_PUBLIC_KEY` | ERP's RS256 public key (PEM, single-line with \n) |
+| `SESSION_SECRET` | 32+ char random string for cookie signing |
+| `PROXY_ALLOWED_DOMAINS` | Comma-separated domains the proxy may fetch |
+| `CSP_HEADER` | Optional override for Content-Security-Policy |
 
-### Camera Feeds (`/admin/cameras`)
-- View CCTV feeds from all buses
-- Single camera view (full screen)
-- Grid view (all cameras)
-- 4 channels per bus
-- Main/Sub quality toggle
+### Backend (`backend/.env`)
 
-## 🔧 Configuration
+| Variable | Notes |
+|----------|-------|
+| `FLEET_USERNAME` / `FLEET_PASSWORD` | Fleet API credentials |
+| `DEVICE_IDS` | Comma-separated GPS device IDs |
+| `ALLOWED_ORIGINS` | CORS origins (defaults restricted in production) |
+| `ENVIRONMENT` | `development` or `production` |
 
-### Backend Configuration (`backend/.env`)
+## Troubleshooting
 
-```bash
-FLEET_USERNAME=your_fleet_username
-FLEET_PASSWORD=your_fleet_password
-DEVICE_IDS=device1,device2,device3
-ALLOWED_ORIGINS=http://localhost:3000
-API_PORT=8000
-ENVIRONMENT=development
-```
-
-### Frontend Configuration (`.env.local`)
-
-```bash
-# Firebase
-NEXT_PUBLIC_FIREBASE_API_KEY=your_api_key
-NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your-app.firebaseapp.com
-NEXT_PUBLIC_FIREBASE_PROJECT_ID=your-project-id
-
-# Google Maps
-NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=your_maps_api_key
-
-# Backend URL
-NEXT_PUBLIC_BACKEND_BASE_URL=http://localhost:8000
-```
-
-## 🐛 Troubleshooting
-
-### Backend Not Starting
-```bash
-# Check if port 8000 is in use
-netstat -ano | findstr :8000
-
-# Install missing dependencies
-cd backend
-pip install -r requirements.txt
-```
-
-### Frontend Not Starting
-```bash
-# Clear cache and reinstall
-rm -rf node_modules .next
-pnpm install
-pnpm dev
-```
-
-### No GPS Data Showing
-1. Check backend is running (`http://localhost:8000/api/health`)
-2. Verify Fleet API credentials in `backend/.env`
-3. Check device IDs are correct
-4. Look at backend terminal for error messages
-
-### Map Not Loading
-1. Verify Google Maps API key in `.env.local`
-2. Enable Maps JavaScript API in Google Cloud Console
-3. Check browser console for errors
-
-### Firebase Auth Not Working
-1. Verify Firebase configuration in `.env.local`
-2. Enable Email/Password auth in Firebase Console
-3. Check Firebase rules allow read/write
-
-## 📚 Additional Resources
-
-- [Project Structure](./PROJECT_STRUCTURE.md) - Detailed folder organization
-- [Backend API Docs](./backend/README.md) - API endpoints and usage
-- [Firebase Schema](./FIREBASE_SCHEMA.md) - Database structure
-- [Reorganization Summary](./REORGANIZATION_SUMMARY.md) - Recent changes
-
-## 🎯 Next Steps
-
-1. **Add Your Buses**: Configure device IDs in `backend/.env`
-2. **Set Up Firebase**: Create Firebase project and add credentials
-3. **Get Google Maps Key**: Enable Maps APIs in Google Cloud
-4. **Create Admin Account**: First login creates the account
-5. **Assign Buses**: Use admin dashboard to assign buses to routes
-
-## 💡 Tips
-
-- **Development**: Both servers support hot-reload
-- **API Testing**: Use `http://localhost:8000/docs` for interactive API docs
-- **Debugging**: Check browser console and terminal outputs
-- **CORS Issues**: Ensure backend `ALLOWED_ORIGINS` includes your frontend URL
-
-## 🆘 Getting Help
-
-1. Check terminal outputs for error messages
-2. Review [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md) for architecture
-3. Check [Backend README](./backend/README.md) for API details
-4. Look at browser console for frontend errors
-
----
-
-**Ready to go!** 🎉 Both servers should now be running and you can access the application at http://localhost:3000
+| Issue | Check |
+|-------|-------|
+| Backend won't start | `FLEET_USERNAME`, `FLEET_PASSWORD`, `DEVICE_IDS` in `backend/.env` |
+| No GPS data | Fleet API credentials, device IDs, backend health at `/api/health` |
+| Map blank | `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` and Maps JS API enabled |
+| SSO fails | `ERP_SSO_PUBLIC_KEY` format, SESSION_SECRET set, token not expired |
+| 403 on proxy | `PROXY_ALLOWED_DOMAINS` must include the target domain |

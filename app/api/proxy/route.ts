@@ -1,9 +1,29 @@
 import { NextRequest, NextResponse } from "next/server"
 
-/**
- * GET /api/proxy?url=<encoded_url>
- * Proxy requests to external APIs to avoid CORS issues
- */
+const ALLOWED_DOMAINS = (process.env.PROXY_ALLOWED_DOMAINS || "")
+  .split(",")
+  .map((d) => d.trim().toLowerCase())
+  .filter(Boolean)
+
+function isDomainAllowed(url: string): boolean {
+  if (ALLOWED_DOMAINS.length === 0 && process.env.NODE_ENV !== "development") {
+    return false
+  }
+
+  if (ALLOWED_DOMAINS.length === 0) {
+    return true
+  }
+
+  try {
+    const parsed = new URL(url)
+    return ALLOWED_DOMAINS.some(
+      (allowed) => parsed.hostname === allowed || parsed.hostname.endsWith("." + allowed)
+    )
+  } catch {
+    return false
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams
@@ -16,14 +36,18 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Decode the URL
     const targetUrl = decodeURIComponent(url)
 
-    // Make the request to the external API
+    if (!isDomainAllowed(targetUrl)) {
+      return NextResponse.json(
+        { error: "Proxying to this domain is not allowed. Configure PROXY_ALLOWED_DOMAINS environment variable." },
+        { status: 403 }
+      )
+    }
+
     const response = await fetch(targetUrl)
     const data = await response.json()
 
-    // Return the data with appropriate headers
     return NextResponse.json(data, {
       status: response.status,
       headers: {

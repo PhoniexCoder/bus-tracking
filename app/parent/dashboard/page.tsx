@@ -1,21 +1,18 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useAuth } from "@/contexts/auth-context"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
-import { Bus, Clock, LogOut, MapPin, Navigation, RefreshCw, Users } from "lucide-react"
-import { auth } from "@/lib/firebase"
-import { doc, getDoc } from "firebase/firestore"
-import { config } from "@/lib/config"
+import { Bus, Clock, LogOut, MapPin, Navigation, RefreshCw, Users, Bell, HelpCircle, Activity, ShieldAlert } from "lucide-react"
 import { fetchBackendAPI } from "@/lib/backend-auth"
 import { FirestoreService, type StudentProfile } from "@/lib/firestore"
-import type { DirectionsResult, LatLng } from "@/lib/google-maps"
+import type { DirectionsResult } from "@/lib/google-maps"
 import { GoogleMapsService } from "@/lib/google-maps"
 import { GoogleMap } from "@/components/google-map"
+import haversine from "haversine-distance"
 
 interface ParentLocation {
   latitude: number
@@ -37,13 +34,19 @@ export default function ParentDashboard() {
   const router = useRouter()
   const [profile, setProfile] = useState<StudentProfile | null>(null)
   const [busStatus, setBusStatus] = useState<ParentBusStatus | null>(null)
-  const [busData, setBusData] = useState<any>(null) // Bus data from Firebase
+  const [busData, setBusData] = useState<any>(null)
   const [parentLocation, setParentLocation] = useState<ParentLocation | null>(null)
   const [directions, setDirections] = useState<DirectionsResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
-  const [wsConnected, setWsConnected] = useState(false) // WebSocket connection status
+  const [wsConnected, setWsConnected] = useState(false)
+  const [showRoutePath, setShowRoutePath] = useState(true)
+  const [stops, setStops] = useState<any[]>([])
+  const busDataRef = useRef(busData)
+  useEffect(() => {
+    busDataRef.current = busData
+  }, [busData])
 
   // Get parent's current location
   const getCurrentLocation = useCallback(() => {
@@ -61,8 +64,6 @@ export default function ParentDashboard() {
         })
       },
       (err) => {
-        // The GeolocationPositionError object doesn't serialize well.
-        // Log its properties individually for a clear error message.
         console.error(`Error getting location: Code ${err.code} - ${err.message}`)
         let friendlyMessage = "Unable to get your location. "
         if (err.code === 1) {
@@ -70,29 +71,44 @@ export default function ParentDashboard() {
         } else if (err.code === 2) {
           friendlyMessage += "Location information is currently unavailable."
         }
-
         setError(friendlyMessage)
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
     )
   }, [])
 
+  // Fetch stops from Firestore
+  const loadRouteStops = useCallback(async (busId: string) => {
+    if (!user) return
+    try {
+      const firestoreService = new FirestoreService(user.sub)
+      const assignments = await firestoreService.getAllBusAssignments()
+      const assignment = assignments.find((a) => a.busId === busId)
+      if (assignment?.routeId) {
+        const routeDoc = await firestoreService.getRouteById(assignment.routeId)
+        if (routeDoc?.stops) {
+          setStops(routeDoc.stops.sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0)))
+        }
+      }
+    } catch (err) {
+      console.error("Error loading route stops:", err)
+    }
+  }, [user])
+
   // Fetch bus status
   const fetchBusStatus = useCallback(async () => {
     if (!profile?.assignedBusId) return
 
     try {
-      // Fetch bus data from Firebase
       if (user) {
-        const firestoreService = new FirestoreService(user.uid);
-        const allBuses = await firestoreService.getAllBuses();
-        const firebaseBus = allBuses.find(b => b.busId === profile.assignedBusId);
+        const firestoreService = new FirestoreService(user.sub)
+        const allBuses = await firestoreService.getAllBuses()
+        const firebaseBus = allBuses.find((b) => b.busId === profile.assignedBusId)
         if (firebaseBus) {
-          setBusData(firebaseBus);
+          setBusData(firebaseBus)
         }
       }
 
-      // Fetch from FastAPI backend with authentication
       const response = await fetchBackendAPI(`/api/liveplate?device_id=${encodeURIComponent(profile.assignedBusId)}`)
       const data = await response.json()
 
@@ -107,14 +123,16 @@ export default function ParentDashboard() {
         mlng: Number(gps?.longitude || 0),
         dt: gps?.last_update ? new Date(gps.last_update * 1000).toISOString() : new Date().toISOString(),
         online: !!gps?.online,
+        s1: data?.s1 || "",
       }
       setBusStatus(status)
       setLastUpdate(new Date())
+      loadRouteStops(profile.assignedBusId)
     } catch (err) {
       console.error("Error fetching bus status:", err)
       setError("Unable to fetch bus location")
     }
-  }, [profile?.assignedBusId, user])
+  }, [profile?.assignedBusId, user, loadRouteStops])
 
   // Calculate distance and ETA
   const calculateDirections = useCallback(async () => {
@@ -141,9 +159,8 @@ export default function ParentDashboard() {
 
     const loadProfile = async () => {
       try {
-        const firestoreService = new FirestoreService(user.uid)
+        const firestoreService = new FirestoreService(user.sub)
         const studentProfile = await firestoreService.getStudentProfile()
-
         if (studentProfile) {
           setProfile(studentProfile)
         }
@@ -173,12 +190,11 @@ export default function ParentDashboard() {
 
     const connectWebSocket = () => {
       try {
-        // Use environment variable or fallback to localhost
-        const wsUrl = process.env.NEXT_PUBLIC_BACKEND_WS_URL || 'ws://localhost:8000'
+        const wsUrl = process.env.NEXT_PUBLIC_BACKEND_WS_URL || "ws://localhost:8000"
         ws = new WebSocket(`${wsUrl}/ws/live`)
 
         ws.onopen = () => {
-          console.log('✅ WebSocket connected')
+          console.log("✅ WebSocket connected")
           setWsConnected(true)
           setError("")
         }
@@ -186,16 +202,14 @@ export default function ParentDashboard() {
         ws.onmessage = async (event) => {
           try {
             const liveData = JSON.parse(event.data)
-            
-            // Find the assigned bus in the live data
             const busDevice = liveData.find((item: any) => item.device_id === profile.assignedBusId)
             
             if (busDevice) {
-              // Fetch bus data from Firebase if not already loaded
-              if (!busData && user) {
-                const firestoreService = new FirestoreService(user.uid)
+              const currentBusData = busDataRef.current
+              if (!currentBusData && user) {
+                const firestoreService = new FirestoreService(user.sub)
                 const allBuses = await firestoreService.getAllBuses()
-                const firebaseBus = allBuses.find(b => b.busId === profile.assignedBusId)
+                const firebaseBus = allBuses.find((b) => b.busId === profile.assignedBusId)
                 if (firebaseBus) {
                   setBusData(firebaseBus)
                 }
@@ -208,58 +222,49 @@ export default function ParentDashboard() {
                 mlng: Number(gps.longitude || 0),
                 dt: gps.last_update ? new Date(gps.last_update * 1000).toISOString() : new Date().toISOString(),
                 online: !!gps.online,
+                s1: busDevice.s1 || "",
               }
               setBusStatus(status)
               setLastUpdate(new Date())
             }
           } catch (err) {
-            console.error('Error parsing WebSocket message:', err)
+            console.error("Error parsing WebSocket message:", err)
           }
         }
 
         ws.onerror = (error) => {
-          console.error('❌ WebSocket error:', error)
-          console.log('💡 Make sure backend is running at:', process.env.NEXT_PUBLIC_BACKEND_WS_URL || 'ws://localhost:8000')
+          console.error("❌ WebSocket error:", error)
           setWsConnected(false)
         }
 
-        ws.onclose = (event) => {
-          console.log('🔌 WebSocket disconnected. Code:', event.code, 'Reason:', event.reason || 'No reason provided')
+        ws.onclose = () => {
           setWsConnected(false)
-          
-          // Fallback to HTTP polling if WebSocket fails on first connection
-          console.log('🔄 Falling back to HTTP polling...')
           fetchBusStatus()
-          
-          // Attempt to reconnect after 5 seconds
           reconnectTimeout = setTimeout(() => {
-            console.log('🔄 Attempting to reconnect WebSocket...')
             connectWebSocket()
           }, 5000)
         }
       } catch (err) {
-        console.error('Failed to connect WebSocket:', err)
-        setError('Unable to establish real-time connection')
-        
-        // Fallback to HTTP polling
+        console.error("Failed to connect WebSocket:", err)
+        setError("Unable to establish real-time connection")
         fetchBusStatus()
         reconnectTimeout = setTimeout(connectWebSocket, 5000)
       }
     }
 
-    // Initial connection
     connectWebSocket()
 
-    // Cleanup on unmount
     return () => {
       if (ws) {
+        ws.onopen = null
+        ws.onmessage = null
+        ws.onerror = null
+        ws.onclose = null
         ws.close()
       }
-      if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout)
-      }
+      if (reconnectTimeout) clearTimeout(reconnectTimeout)
     }
-  }, [profile?.assignedBusId, user, busData, fetchBusStatus])
+  }, [profile?.assignedBusId, user, fetchBusStatus])
 
   const handleLogout = async () => {
     await logout()
@@ -273,281 +278,343 @@ export default function ParentDashboard() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-emerald-100">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#0A0A0B] text-white">
+        <div className="relative w-16 h-16">
+          <div className="absolute inset-0 rounded-full border-4 border-[#5e5ce6]/20 animate-pulse"></div>
+          <div className="absolute inset-0 rounded-full border-4 border-t-[#5e5ce6] animate-spin"></div>
+        </div>
+        <p className="mt-6 text-xs font-bold tracking-widest text-[#c7c4d7]/80 uppercase animate-pulse">
+          Loading Control Deck...
+        </p>
       </div>
     )
   }
 
-  const passengerCount = busStatus?.s1 ? parseInt(busStatus.s1, 10) : null
-  if (passengerCount !== null && isNaN(passengerCount)) {
-    console.warn(`Could not parse passenger count from busStatus.s1: "${busStatus?.s1}"`)
-  }
+  const passengerCount = busStatus?.s1 ? parseInt(busStatus.s1, 10) : 0
+  const nextStop = stops.length > 0 ? stops[0] : null
+  const progressPercent = busStatus && nextStop
+    ? Math.max(10, Math.min(90, 100 - Math.round((haversine({ lat: busStatus.mlat, lng: busStatus.mlng }, { lat: nextStop.latitude, lng: nextStop.longitude }) / 1000) * 10)))
+    : 50
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Professional Government Header */}
-      <header className="bg-white border-b-4 border-blue-600 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="bg-blue-600 p-3 rounded-lg">
-                <Bus className="h-8 w-8 text-white" />
-              </div>
-              <div>
-                <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">
-                  Parent Dashboard
-                </h1>
-                <p className="text-sm text-gray-600">School Transport Tracking System</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {/* WebSocket Status Indicator */}
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 text-xs">
-                <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-                <span className="text-gray-700 hidden sm:inline">{wsConnected ? 'Live' : 'Connecting...'}</span>
-              </div>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={handleRefresh}
-                className="border-blue-600 text-blue-600 hover:bg-blue-50"
-              >
-                <RefreshCw className="h-4 w-4 sm:mr-2" />
-                <span className="hidden sm:inline">Refresh</span>
-              </Button>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={handleLogout}
-                className="border-gray-300 hover:bg-gray-50"
-              >
-                <LogOut className="h-4 w-4 sm:mr-2" />
-                <span className="hidden sm:inline">Sign Out</span>
-              </Button>
-            </div>
-          </div>
+    <div className="min-h-screen bg-[#111317] text-[#e2e2e7] font-sans selection:bg-[#5e5ce6]/30 selection:text-white relative overflow-hidden flex flex-col h-screen">
+      <style dangerouslySetInnerHTML={{ __html: `
+        .glass-card {
+          background: rgba(255, 255, 255, 0.05);
+          backdrop-filter: blur(24px);
+          -webkit-backdrop-filter: blur(24px);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1);
+        }
+        .active-glow {
+          box-shadow: 0 0 20px rgba(94, 92, 230, 0.3);
+        }
+        .pulse-indicator {
+          position: relative;
+        }
+        .pulse-indicator::after {
+          content: '';
+          position: absolute;
+          width: 100%;
+          height: 100%;
+          top: 0;
+          left: 0;
+          background: inherit;
+          border-radius: inherit;
+          animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+          0% { transform: scale(1); opacity: 0.8; }
+          100% { transform: scale(2.5); opacity: 0; }
+        }
+      ` }} />
+
+      {/* TOP NAVIGATION BAR */}
+      <header className="fixed top-0 w-full bg-[#111317]/60 backdrop-blur-xl border-b border-[#333539]/20 shadow-sm flex justify-between items-center px-6 py-2 h-16 z-50 transition-all duration-300 ease-in-out">
+        <div className="flex items-center gap-2">
+          <span className="text-lg font-bold text-[#c2c1ff]">OmniBus Tracking</span>
+          <span className="text-[10px] uppercase bg-[#5e5ce6]/20 text-[#c2c1ff] border border-[#5e5ce6]/30 px-2 py-0.5 rounded-full font-bold">Parent</span>
         </div>
-        <div className="bg-gray-100 border-t border-gray-200">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
-            <div className="flex items-center justify-between text-sm">
-              <div className="flex items-center gap-4">
-                <span className="text-gray-700">
-                  <strong>Parent:</strong> {profile?.name || "User"}
-                </span>
-                {profile?.assignedBusId && (
-                  <span className="text-gray-700">
-                    <strong>Bus ID:</strong> {profile.assignedBusId}
-                  </span>
-                )}
-              </div>
-              {lastUpdate && (
-                <span className="text-gray-600 text-xs">
-                  Last Updated: {lastUpdate.toLocaleString('en-IN')}
-                </span>
-              )}
-            </div>
+        <div className="hidden md:flex items-center gap-4">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-xs">
+            <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-400 pulse-indicator' : 'bg-red-500'}`}></div>
+            <span className="text-[#c7c4d7] font-medium">{wsConnected ? 'Live Connection' : 'Connecting...'}</span>
+          </div>
+          <button 
+            onClick={handleRefresh}
+            className="p-2 rounded-full hover:bg-[#5e5ce6]/10 text-[#c7c4d7] hover:text-[#e2e2e7] transition-all"
+            title="Refresh logs & coordinates"
+          >
+            <RefreshCw className="h-4 w-4" />
+          </button>
+          <button className="p-2 rounded-full hover:bg-[#5e5ce6]/10 text-[#c7c4d7] hover:text-[#e2e2e7] transition-all">
+            <Bell className="h-4 w-4" />
+          </button>
+          <button className="p-2 rounded-full hover:bg-[#5e5ce6]/10 text-[#c7c4d7] hover:text-[#e2e2e7] transition-all">
+            <HelpCircle className="h-4 w-4" />
+          </button>
+          <div className="h-8 w-8 rounded-full overflow-hidden border border-[#5e5ce6]/20 bg-[#5e5ce6]/10 flex items-center justify-center font-bold text-xs text-[#c2c1ff]">
+            {profile?.name ? profile.name.charAt(0).toUpperCase() : "P"}
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {error && (
-          <Alert variant="destructive" className="mb-6">
-            <AlertDescription className="flex items-center gap-2">
-              <span className="font-semibold">Error:</span> {error}
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {!profile?.assignedBusId && !loading && (
-          <Card className="mb-6 border-2 border-orange-300 bg-orange-50">
-            <CardContent className="p-8 text-center">
-              <div className="bg-orange-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Bus className="h-10 w-10 text-orange-600" />
-              </div>
-              <h3 className="text-2xl font-bold text-gray-900 mb-2">
-                No Bus Assigned
-              </h3>
-              <p className="text-gray-700 max-w-md mx-auto">
-                Your ward is not currently assigned to a school bus. Please contact the school administration for bus assignment.
-              </p>
-              <div className="mt-6">
-                <Button variant="outline" className="border-orange-600 text-orange-600 hover:bg-orange-50">
-                  Contact School Administration
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Main Content Grid */}
-        <div className="grid lg:grid-cols-3 gap-6">
-          {/* Left Column - Status Cards */}
-          <div className="lg:col-span-1 space-y-4">
-            {/* Bus Status Card */}
-            {busStatus && (
-              <Card className="border border-gray-300 shadow-sm">
-                <CardHeader className="bg-gray-50 border-b border-gray-200 pb-3">
-                  <CardTitle className="text-lg font-bold text-gray-900 flex items-center">
-                    <Bus className="h-5 w-5 mr-2 text-blue-600" />
-                    Vehicle Status
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-4 space-y-3">
-                  <div>
-                    <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Vehicle Number</label>
-                    <p className="text-lg font-bold text-gray-900 mt-1">
-                      {busData?.plateNumber || busStatus.nm}
-                    </p>
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Status</label>
-                    <div className="mt-1">
-                      <Badge 
-                        variant={busStatus.online ? "default" : "secondary"}
-                        className={`${busStatus.online ? 'bg-green-600' : 'bg-gray-400'} text-white font-semibold`}
-                      >
-                        {busStatus.online ? "● ACTIVE" : "● OFFLINE"}
-                      </Badge>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Last Location Update</label>
-                    <p className="text-sm text-gray-700 mt-1">{new Date(busStatus.dt).toLocaleString('en-IN')}</p>
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">GPS Coordinates</label>
-                    <p className="text-xs text-gray-600 font-mono mt-1">
-                      {busStatus.mlat.toFixed(6)}, {busStatus.mlng.toFixed(6)}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Distance & ETA Card */}
-            {directions && (
-              <Card className="border border-gray-300 shadow-sm">
-                <CardHeader className="bg-gray-50 border-b border-gray-200 pb-3">
-                  <CardTitle className="text-lg font-bold text-gray-900 flex items-center">
-                    <Navigation className="h-5 w-5 mr-2 text-blue-600" />
-                    Travel Information
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="pt-4 space-y-4">
-                  <div className="bg-blue-50 border-l-4 border-blue-600 p-4">
-                    <label className="text-xs font-semibold text-blue-900 uppercase tracking-wide">Distance</label>
-                    <p className="text-2xl font-bold text-blue-900 mt-1">{directions.distance}</p>
-                  </div>
-                  <div className="bg-orange-50 border-l-4 border-orange-600 p-4">
-                    <label className="text-xs font-semibold text-orange-900 uppercase tracking-wide">Estimated Arrival Time</label>
-                    <p className="text-2xl font-bold text-orange-900 mt-1">{directions.duration}</p>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+      {/* SIDE NAVIGATION (Desktop Only) */}
+      <aside className="hidden md:flex flex-col h-screen w-64 fixed left-0 top-0 bg-[#1a1c1f]/80 backdrop-blur-2xl border-r border-[#333539]/20 shadow-xl p-4 z-40 pt-20">
+        <div className="mb-8 px-2">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="w-8 h-8 rounded-lg bg-[#5e5ce6] flex items-center justify-center">
+              <Bus className="h-4 w-4 text-white" />
+            </div>
+            <span className="text-[#c2c1ff] font-bold truncate">OmniBus Command</span>
           </div>
+          <p className="text-[10px] font-semibold text-[#c7c4d7] uppercase tracking-wider pl-1">{profile?.name || "Active Session"}</p>
+        </div>
 
-          {/* Right Column - Map */}
-          <div className="lg:col-span-2">
-            <Card className="border border-gray-300 shadow-sm h-full">
-              <CardHeader className="bg-gray-50 border-b border-gray-200 pb-3">
-                <CardTitle className="text-lg font-bold text-gray-900 flex items-center">
-                  <MapPin className="h-5 w-5 mr-2 text-blue-600" />
-                  Live Vehicle Tracking Map
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                {busStatus ? (
-                  <div className="h-[600px] lg:h-[700px] relative">
-                    <GoogleMap
-                      markers={[
-                        // Bus marker
-                        {
-                          lat: busStatus.mlat,
-                          lng: busStatus.mlng,
-                          label: busData?.plateNumber || busStatus.nm,
-                          status: busStatus.online ? 'online' : 'offline',
-                          type: 'bus'
-                        },
-                        // User location marker
-                        ...(parentLocation ? [{
-                          lat: parentLocation.latitude,
-                          lng: parentLocation.longitude,
-                          label: 'Your Location',
-                          type: 'user'
-                        }] : []),
-                        // Route polyline
-                        ...(directions?.polyline && parentLocation ? [{
-                          lat: 0,
-                          lng: 0,
-                          type: 'polyline',
-                          path: directions.polyline
-                        }] : [])
-                      ]}
-                      height="100%"
-                      width="100%"
-                    />
-                    {/* Map Legend */}
-                    <div className="absolute bottom-4 left-4 bg-white border-2 border-gray-300 rounded-lg p-3 shadow-lg">
-                      <p className="text-xs font-bold text-gray-900 mb-2">Map Legend</p>
-                      <div className="space-y-1 text-xs">
-                        <div className="flex items-center gap-2">
-                          <Bus className="h-3 w-3 text-blue-600" />
-                          <span className="text-gray-700">School Bus</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <MapPin className="h-3 w-3 text-red-600" />
-                          <span className="text-gray-700">Your Location</span>
-                        </div>
-                        {directions && (
-                          <div className="flex items-center gap-2">
-                            <div className="w-4 h-0.5 bg-blue-600"></div>
-                            <span className="text-gray-700">Route</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
+        <nav className="flex-1 space-y-1">
+          <a className="flex items-center gap-3 px-4 py-3 text-[#c7c4d7] hover:bg-white/5 hover:text-[#e2e2e7] rounded-xl transition-all" href="#">
+            <Activity className="h-4 w-4" />
+            Dashboard
+          </a>
+          <a className="flex items-center gap-3 px-4 py-3 bg-[#5e5ce6] text-white rounded-xl active-glow transition-all" href="#">
+            <MapPin className="h-4 w-4" />
+            Live Map View
+          </a>
+        </nav>
+
+        <div className="mt-auto space-y-3">
+          <button 
+            onClick={handleLogout}
+            className="w-full py-3 px-4 bg-white/5 hover:bg-red-500/10 text-red-400 hover:text-red-300 border border-white/10 rounded-xl font-medium text-sm flex items-center justify-center gap-2 transition-all"
+          >
+            <LogOut className="h-4 w-4" />
+            Sign Out
+          </button>
+        </div>
+      </aside>
+
+      {/* MAIN CANVAS (Interactive Map) */}
+      <main className="flex-1 w-full md:pl-64 pt-16 relative overflow-hidden h-full">
+        {/* Error banner */}
+        {error && (
+          <div className="absolute top-4 left-4 right-4 z-30 mx-auto max-w-xl">
+            <Alert variant="destructive" className="bg-red-950/80 border-red-500/30 text-red-400 rounded-xl backdrop-blur">
+              <AlertDescription className="font-semibold text-center text-xs flex items-center justify-center gap-2">
+                <ShieldAlert className="h-4 w-4" />
+                {error}
+              </AlertDescription>
+            </Alert>
+          </div>
+        )}
+
+        {/* Map Background */}
+        <div className="absolute inset-0 z-0 h-full w-full">
+          {profile?.assignedBusId && busStatus ? (
+            <GoogleMap
+              markers={[
+                // Bus marker
+                {
+                  lat: busStatus.mlat,
+                  lng: busStatus.mlng,
+                  label: busData?.plateNumber || busStatus.nm,
+                  status: busStatus.online ? 'online' : 'offline',
+                  type: 'bus',
+                },
+                // User/Parent marker
+                ...(parentLocation ? [{
+                  lat: parentLocation.latitude,
+                  lng: parentLocation.longitude,
+                  label: 'Parent Location',
+                  type: 'user',
+                }] : []),
+                // Route stops markers
+                ...stops.map((stop, i) => ({
+                  lat: stop.latitude,
+                  lng: stop.longitude,
+                  label: `${i + 1}`,
+                  type: 'stop',
+                  status: 'notpassed',
+                })),
+                // Route polyline
+                ...(showRoutePath && directions?.polyline && parentLocation ? [{
+                  lat: 0,
+                  lng: 0,
+                  type: 'polyline',
+                  path: directions.polyline,
+                }] : [])
+              ]}
+              center={busStatus ? { lat: busStatus.mlat, lng: busStatus.mlng } : undefined}
+              height="100%"
+              width="100%"
+              showTrafficLayer={true}
+            />
+          ) : (
+            <div className="absolute inset-0 w-full h-full flex flex-col items-center justify-center bg-[#111317]">
+              {!profile?.assignedBusId && !loading ? (
+                <div className="glass-card border-yellow-500/20 bg-yellow-500/5 p-8 text-center rounded-[32px] max-w-md mx-6 shadow-2xl backdrop-blur">
+                  <div className="bg-yellow-500/10 border border-yellow-500/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <Bus className="h-8 w-8 text-yellow-400" />
                   </div>
-                ) : (
-                  <div className="h-[600px] flex items-center justify-center bg-gray-50">
-                    <div className="text-center">
-                      <div className="bg-gray-200 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <MapPin className="h-10 w-10 text-gray-400" />
-                      </div>
-                      <p className="text-gray-600 font-semibold">Waiting for vehicle location...</p>
-                      <div className="mt-4">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
-                      </div>
+                  <h3 className="text-xl font-bold text-white mb-2">No Bus Assigned</h3>
+                  <p className="text-[#c7c4d7]/80 leading-relaxed text-sm">
+                    This account is not currently assigned to a school transport route. Please contact your coordinator.
+                  </p>
+                </div>
+              ) : (
+                <div className="text-center space-y-4">
+                  <div className="bg-[#5e5ce6]/10 border border-[#5e5ce6]/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto animate-pulse">
+                    <MapPin className="h-8 w-8 text-[#5e5ce6]" />
+                  </div>
+                  <p className="text-sm font-bold text-white uppercase tracking-wider">Establishing Connection</p>
+                  <p className="text-xs text-[#c7c4d7]/60">Waiting for vehicle telemetry signals...</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* FLOATING CONTROL PANEL */}
+        {profile?.assignedBusId && busStatus && (
+          <div className="absolute left-4 top-4 bottom-24 md:bottom-4 w-[calc(100%-32px)] md:w-80 z-20 pointer-events-none flex flex-col gap-4 max-h-[calc(100%-110px)] overflow-y-auto pr-1">
+            <div className="glass-card rounded-2xl p-4 pointer-events-auto flex flex-col gap-4 backdrop-blur">
+              {/* STATUS HEADER */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className={`w-3 h-3 rounded-full ${busStatus.online ? 'bg-green-400 pulse-indicator' : 'bg-gray-500'}`}></span>
+                  <span className="font-semibold text-white text-sm">
+                    {busData?.plateNumber || busStatus.nm} - {busStatus.online ? 'Active' : 'Offline'}
+                  </span>
+                </div>
+                <span className="text-[10px] bg-white/5 px-2 py-1 rounded-lg text-[#c7c4d7] border border-white/5 font-mono">
+                  {profile.assignedBusId}
+                </span>
+              </div>
+
+              {/* ETA CARD */}
+              <div className="bg-[#5e5ce6]/95 rounded-xl p-4 shadow-lg flex flex-col items-center text-center text-white">
+                <span className="text-[10px] text-white/75 uppercase tracking-widest mb-1">Estimated Arrival</span>
+                <span className="text-2xl font-bold mb-2">{directions?.duration || "Calculating..."}</span>
+                {directions?.distance && (
+                  <div className="flex items-center gap-1.5 text-white/90 text-xs">
+                    <Navigation className="h-3.5 w-3.5" />
+                    <span>{directions.distance} away</span>
+                  </div>
+                )}
+              </div>
+
+              {/* STATS BENTO */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-white/5 rounded-xl p-3 flex flex-col gap-1 border border-white/5">
+                  <Users className="h-4 w-4 text-[#5e5ce6]" />
+                  <span className="text-[10px] text-[#c7c4d7]">Passengers</span>
+                  <span className="text-sm font-semibold text-white">{passengerCount > 0 ? `${passengerCount} Onboard` : '0 Onboard'}</span>
+                </div>
+                <div className="bg-white/5 rounded-xl p-3 flex flex-col gap-1 border border-white/5">
+                  <Activity className="h-4 w-4 text-[#5e5ce6]" />
+                  <span className="text-[10px] text-[#c7c4d7]">Status</span>
+                  <span className="text-sm font-semibold text-white">{busStatus.online ? "Transit" : "Parked"}</span>
+                </div>
+              </div>
+
+              {/* NEXT STOP */}
+              <div className="bg-white/5 rounded-xl p-3 border border-white/5">
+                <div className="flex items-center gap-2 mb-2">
+                  <MapPin className="h-4 w-4 text-[#5e5ce6]" />
+                  <span className="text-xs font-semibold text-white">Next Target Stop</span>
+                </div>
+                <p className="text-xs text-[#c7c4d7] truncate">{nextStop?.name || "Depot Gateway"}</p>
+                <div className="mt-3 w-full bg-white/10 h-1.5 rounded-full overflow-hidden">
+                  <div className="h-full bg-[#5e5ce6] shadow-[0_0_10px_rgba(94,92,230,0.5)] transition-all duration-500" style={{ width: `${progressPercent}%` }}></div>
+                </div>
+              </div>
+
+              {/* ROUTE TOGGLE */}
+              <div className="flex items-center justify-between px-1">
+                <div className="flex items-center gap-2">
+                  <Navigation className="h-4 w-4 text-[#c7c4d7]" />
+                  <span className="text-xs text-white">Show Optimal Path</span>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={showRoutePath}
+                    onChange={(e) => setShowRoutePath(e.target.checked)}
+                    className="sr-only peer" 
+                  />
+                  <div className="w-11 h-6 bg-[#333539] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#5e5ce6] active-glow"></div>
+                </label>
+              </div>
+
+              <button 
+                onClick={handleRefresh}
+                className="w-full py-2.5 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-semibold border border-white/5 transition-all flex items-center justify-center gap-2"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Trigger Telemetry Update
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* RECENT ALERTS (Floating Right - Desktop Only) */}
+        {profile?.assignedBusId && busStatus && (
+          <div className="absolute right-4 bottom-4 z-20 hidden lg:block w-72 pointer-events-none">
+            <div className="glass-card rounded-2xl p-4 pointer-events-auto backdrop-blur">
+              <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-1">
+                <span className="font-semibold text-white text-xs">Command Alerts</span>
+                <Clock className="h-4 w-4 text-[#5e5ce6]" />
+              </div>
+              <div className="space-y-3">
+                <div className="flex gap-2">
+                  <div className="w-1 bg-[#5e5ce6] rounded-full"></div>
+                  <div>
+                    <p className="text-xs text-white">WebSocket connection online</p>
+                    <p className="text-[9px] text-[#c7c4d7] uppercase font-mono">Real-time Telemetry</p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <div className="w-1 bg-green-500 rounded-full"></div>
+                  <div>
+                    <p className="text-xs text-white">Bus location synchronized</p>
+                    <p className="text-[9px] text-[#c7c4d7] uppercase font-mono">{lastUpdate ? lastUpdate.toLocaleTimeString() : "Synchronized"}</p>
+                  </div>
+                </div>
+                {busStatus.online && (
+                  <div className="flex gap-2">
+                    <div className="w-1 bg-[#5e5ce6] rounded-full"></div>
+                    <div>
+                      <p className="text-xs text-white">Transmitting coordinates</p>
+                      <p className="text-[9px] text-[#c7c4d7] uppercase font-mono">{busStatus.mlat.toFixed(4)}, {busStatus.mlng.toFixed(4)}</p>
                     </div>
                   </div>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </main>
 
-      {/* Official Footer */}
-      <footer className="bg-gray-800 text-white mt-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="grid md:grid-cols-3 gap-6 text-sm">
-            <div>
-              <h3 className="font-bold mb-2">About</h3>
-              <p className="text-gray-400">School Transport Tracking System - An initiative for student safety and parent convenience.</p>
-            </div>
-            <div>
-              <h3 className="font-bold mb-2">Support</h3>
-              <p className="text-gray-400">For technical support, contact: support@globalschool</p>
-            </div>
-            <div>
-              <h3 className="font-bold mb-2">System Information</h3>
-              <p className="text-gray-400">Version 1.0 | Last Updated: October 2025</p>
-            </div>
-          </div>
-        </div>
-      </footer>
+      {/* BOTTOM NAVIGATION (Mobile Only) */}
+      <nav className="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center h-16 px-4 pb-safe md:hidden bg-[#1e2023]/70 backdrop-blur-lg border-t border-[#333539]/15 shadow-[0_-4px_12px_rgba(0,0,0,0.1)] rounded-t-xl">
+        <a className="flex flex-col items-center justify-center bg-[#5e5ce6]/20 text-[#c2c1ff] rounded-full px-4 py-1 transition-transform scale-95" href="#">
+          <span className="material-symbols-outlined" style={{ fontVariationSettings: "'FILL' 1" }}>location_on</span>
+          <span className="text-[10px] font-medium">Live Map</span>
+        </a>
+        <button 
+          onClick={handleRefresh}
+          className="flex flex-col items-center justify-center text-[#c7c4d7] hover:text-[#5e5ce6] transition-transform scale-95"
+        >
+          <span className="material-symbols-outlined">sync</span>
+          <span className="text-[10px] font-medium">Refresh</span>
+        </button>
+        <button 
+          onClick={handleLogout}
+          className="flex flex-col items-center justify-center text-red-400 hover:text-red-300 transition-transform scale-95"
+        >
+          <span className="material-symbols-outlined">logout</span>
+          <span className="text-[10px] font-medium">Logout</span>
+        </button>
+      </nav>
     </div>
   )
 }

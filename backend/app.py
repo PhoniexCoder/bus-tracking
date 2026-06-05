@@ -1,197 +1,123 @@
-import requests
-import time
-import urllib3
-import threading
 import asyncio
 import json
-import os
 import logging
+import os
 import sys
+import time
+import threading
+import cv2
+import numpy as np
+import subprocess
+import shlex
 from datetime import datetime
+from typing import Generator
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
-from typing import Dict, Set
 from pydantic import BaseModel
-from dotenv import load_dotenv
 
-# Import authentication utilities
+from config import (
+    FLEET_USERNAME, FLEET_PASSWORD, DEVICE_IDS, BASE_URL,
+    API_HOST, API_PORT, ENVIRONMENT, ALLOWED_ORIGINS,
+    ADMIN_USERNAME, ADMIN_PASSWORD,
+)
+from contextlib import asynccontextmanager
+from fleet_client import FleetAPIClient
+from ws_manager import WebSocketManager
 from auth import (
-    create_access_token,
-    get_current_user,
-    get_current_admin_user,
-    verify_password,
-    hash_password
+    create_access_token, get_current_user, verify_password, hash_password,
+    check_login_rate_limit,
 )
 
-# Load environment variables from .env file
-load_dotenv()
+# ── Logging ────────────────────────────────────────────────────────────
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# ------------------ LOGGING CONFIGURATION ------------------
-
-# Ensure logs directory exists
-log_dir = os.path.join(os.path.dirname(__file__), 'logs')
+log_dir = os.path.join(os.path.dirname(__file__), "logs")
 os.makedirs(log_dir, exist_ok=True)
-log_file = os.path.join(log_dir, 'backend.log')
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S',
+    format="%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(log_file, mode='a', encoding='utf-8')
-    ]
+        logging.FileHandler(os.path.join(log_dir, "backend.log"), mode="a", encoding="utf-8"),
+    ],
 )
 
-# Create logger
 logger = logging.getLogger(__name__)
-
-# Suppress noisy loggers
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-# ------------------ CONFIGURATION ------------------
+# ── Global State ───────────────────────────────────────────────────────
 
-USERNAME = os.getenv("FLEET_USERNAME")
-PASSWORD = os.getenv("FLEET_PASSWORD")
+fleet_client = FleetAPIClient(BASE_URL, FLEET_USERNAME, FLEET_PASSWORD, DEVICE_IDS)
+ws_manager = WebSocketManager()
 
-# Parse device IDs from comma-separated string
-DEVICE_IDS = os.getenv("DEVICE_IDS", "").split(",")
-DEVICE_IDS = [dev_id.strip() for dev_id in DEVICE_IDS if dev_id.strip()]
+live_state: dict = {}
+_live_lock = threading.Lock()
 
-BASE_URL = os.getenv("BASE_URL", "http://fleet.lagaam.in")
-API_HOST = os.getenv("API_HOST", "0.0.0.0")
-API_PORT = int(os.getenv("API_PORT", "8000"))
-
-# Parse allowed origins from comma-separated string
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
-ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS if origin.strip()]
-
-ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
-
-# Validate required configuration
-if not USERNAME or not PASSWORD:
-    raise ValueError("FLEET_USERNAME and FLEET_PASSWORD must be set in .env file")
-
-if not DEVICE_IDS:
-    raise ValueError("DEVICE_IDS must be set in .env file")
-
-print(f"🚀 Starting Bus Management API in {ENVIRONMENT} mode")
-print(f"📍 Monitoring {len(DEVICE_IDS)} device(s): {', '.join(DEVICE_IDS)}")
-print(f"🔒 CORS allowed origins: {', '.join(ALLOWED_ORIGINS)}")
-
-# ------------------ FASTAPI SETUP ------------------
-
-app = FastAPI(title="Bus Management API", debug=(ENVIRONMENT == "development"))
-
-# Add CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ------------------ ERROR HANDLERS ------------------
-
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    """Handle HTTP exceptions with detailed logging."""
-    logger.error(f"HTTP {exc.status_code} error at {request.url.path}: {exc.detail}")
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": exc.detail,
-            "status_code": exc.status_code,
-            "path": str(request.url.path),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Handle validation errors with detailed logging."""
-    logger.error(f"Validation error at {request.url.path}: {exc.errors()}")
-    return JSONResponse(
-        status_code=422,
-        content={
-            "error": "Validation error",
-            "details": exc.errors(),
-            "path": str(request.url.path),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """Handle unexpected exceptions with detailed logging."""
-    logger.exception(f"Unhandled exception at {request.url.path}: {str(exc)}")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal server error",
-            "message": str(exc) if ENVIRONMENT == "development" else "An unexpected error occurred",
-            "path": str(request.url.path),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
-# ------------------ REQUEST LOGGING MIDDLEWARE ------------------
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """Log all HTTP requests and responses."""
-    start_time = time.time()
-    
-    # Log request
-    logger.info(f"→ {request.method} {request.url.path} from {request.client.host}")
-    
-    try:
-        response = await call_next(request)
-        
-        # Calculate duration
-        duration = (time.time() - start_time) * 1000  # Convert to ms
-        
-        # Log response
-        logger.info(f"← {request.method} {request.url.path} - {response.status_code} ({duration:.2f}ms)")
-        
-        return response
-    except Exception as e:
-        logger.error(f"✗ {request.method} {request.url.path} - Error: {str(e)}")
-        raise
-
-# ------------------ GLOBAL STATE ------------------
-
-# Temporary in-memory user database (replace with actual database in production)
-# Password hashes generated using: generate_hash.py
 USERS_DB = {
-    "admin": {
-        "username": "admin",
-        "hashed_password": "$2b$12$FtQzYtnhxpLpsofdmCPYluoQ0uYcQxjjW3LTuDaEpYd5kE/zWeiCm",  # password: admin123
+    ADMIN_USERNAME: {
+        "username": ADMIN_USERNAME,
+        "hashed_password": hash_password(ADMIN_PASSWORD),
         "role": "admin",
-        "email": "admin@bustracking.com"
-    },
-    "driver": {
-        "username": "driver",
-        "hashed_password": "$2b$12$8bfSJX35U17CbP1k4fZgKez/Fibmf5Ou389RIz2x1qYNPXdUeBoYK",  # password: driver123
-        "role": "driver",
-        "email": "driver@bustracking.com"
-    },
-    "parent": {
-        "username": "parent",
-        "hashed_password": "$2b$12$Ge1G59bKBuNO/B97MvfvquSJc90Q/aiCtGvw45470iRKQvGo9aRGu",  # password: parent123
-        "role": "parent",
-        "email": "parent@bustracking.com"
+        "email": f"{ADMIN_USERNAME}@bustracking.com",
     }
 }
 
-# Pydantic models for request/response
+server_start_time = time.time()
+
+class StreamManager:
+    def __init__(self, idle_timeout: int = 30):
+        self._streams: dict = {}
+        self._lock = threading.Lock()
+        self.idle_timeout = idle_timeout
+
+    def get(self, key: tuple) -> subprocess.Popen | None:
+        with self._lock:
+            entry = self._streams.get(key)
+            if entry and entry["proc"].poll() is None:
+                entry["last_used"] = time.time()
+                return entry["proc"]
+            return None
+
+    def set(self, key: tuple, proc: subprocess.Popen):
+        with self._lock:
+            old = self._streams.get(key)
+            if old:
+                try:
+                    old["proc"].kill()
+                except Exception:
+                    pass
+            self._streams[key] = {"proc": proc, "last_used": time.time()}
+
+    def cleanup(self):
+        now = time.time()
+        with self._lock:
+            stale = [k for k, v in self._streams.items()
+                     if now - v["last_used"] > self.idle_timeout]
+            for k in stale:
+                try:
+                    self._streams[k]["proc"].kill()
+                except Exception:
+                    pass
+                del self._streams[k]
+
+    def close_all(self):
+        with self._lock:
+            for entry in self._streams.values():
+                try:
+                    entry["proc"].kill()
+                except Exception:
+                    pass
+            self._streams.clear()
+
+stream_manager = StreamManager()
+
+# ── Pydantic models ───────────────────────────────────────────────────
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -201,205 +127,220 @@ class TokenResponse(BaseModel):
     token_type: str
     user: dict
 
-live_state: Dict = {
-    dev_id: {
-        "device_id": dev_id,
-        "online": False,
-        "latitude": 28.6139,   
-        "longitude": 77.2090,
-        "speed_kmh": 0.0,
-        "last_update": time.time(),
-        "plate_number": f"BUS-{i+1}"
-    } for i, dev_id in enumerate(DEVICE_IDS)
-}
+# ── App lifecycle ──────────────────────────────────────────────────────
 
-websocket_clients: Set[WebSocket] = set()
-current_jsession = None
-jsession_lock = threading.Lock()
-start_time = time.time()  # Track server start time for uptime
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("=" * 60)
+    logger.info("Bus Management API Starting...")
+    logger.info(f"Environment: {ENVIRONMENT}")
+    logger.info(f"CORS origins: {', '.join(ALLOWED_ORIGINS)}")
+    logger.info(f"API running on: http://{API_HOST}:{API_PORT}")
+    logger.info("=" * 60)
 
-# ------------------ AUTH & HELPERS ------------------
+    fleet_client.ensure_session()
 
-def get_jsession():
-    """Authenticate and return new jsession token."""
-    global current_jsession
-    try:
-        logger.debug("Requesting new Fleet API session token...")
-        url = f"{BASE_URL}/StandardApiAction_login.action"
-        params = {"account": USERNAME, "password": PASSWORD}
-        r = requests.get(url, params=params, verify=False, timeout=10)
-        data = r.json()
-        if "jsession" in data:
-            logger.info(f"✓ Fleet API authentication successful: {data['jsession'][:20]}...")
-            current_jsession = data["jsession"]
-            return current_jsession
-        else:
-            logger.error(f"✗ Fleet API login failed: {data}")
-            return None
-    except Exception as e:
-        logger.exception(f"✗ Error getting Fleet API session: {e}")
-        return None
+    discovered = fleet_client.discover_devices()
+    if discovered:
+        new_ids = [d["device_id"] for d in discovered]
+        DEVICE_IDS.clear()
+        DEVICE_IDS.extend(new_ids)
+        fleet_client.update_device_ids(new_ids)
+        with _live_lock:
+            live_state.clear()
+            for i, d in enumerate(discovered):
+                live_state[d["device_id"]] = {
+                    "device_id": d["device_id"], "online": False,
+                    "latitude": 28.6139, "longitude": 77.2090,
+                    "speed_kmh": 0.0, "last_update": time.time(),
+                    "plate_number": d["plate"] or f"BUS-{i+1}",
+                }
+        logger.info("Monitoring %d device(s): %s", len(DEVICE_IDS), ", ".join(DEVICE_IDS))
+    else:
+        logger.warning("No devices discovered — API will have limited functionality")
+
+    gps_thread = threading.Thread(target=_gps_worker, daemon=True)
+    gps_thread.start()
+
+    broadcast_task = asyncio.create_task(_periodic_broadcast())
+
+    cleanup_thread = threading.Thread(target=_stream_cleanup_worker, daemon=True)
+    cleanup_thread.start()
+
+    yield
+
+    logger.info("Shutting down...")
+    broadcast_task.cancel()
+    stream_manager.close_all()
+    await ws_manager.close_all()
+    fleet_client.close()
+    logger.info("Shutdown complete")
 
 
-def build_rtsp_url(device_id: str, channel: int, stream: int):
-    """Construct RTSP streaming URL for a given device/channel/stream."""
-    global current_jsession
-    if not current_jsession:
-        current_jsession = get_jsession()
-        if not current_jsession:
-            return None
-    return (
-        f"rtsp://fleet.lagaam.in:6604/3/3?"
-        f"AVType=1&jsession={current_jsession}&DevIDNO={device_id}&Channel={channel}&Stream={stream}"
+app = FastAPI(title="Bus Management API", debug=(ENVIRONMENT == "development"), lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Error handlers ─────────────────────────────────────────────────────
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    logger.error(f"HTTP {exc.status_code} error at {request.url.path}: {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "status_code": exc.status_code,
+            "path": str(request.url.path),
+            "timestamp": datetime.utcnow().isoformat(),
+        },
     )
 
-def fetch_device_info(dev_id: str):
-    """Fetch plate (vid) and raw device info for a device from the fleet API."""
-    global current_jsession
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.error(f"Validation error at {request.url.path}: {exc.errors()}")
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "Validation error",
+            "details": exc.errors(),
+            "path": str(request.url.path),
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.exception(f"Unhandled exception at {request.url.path}: {str(exc)}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal server error",
+            "message": str(exc) if ENVIRONMENT == "development" else "An unexpected error occurred",
+            "path": str(request.url.path),
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+    )
+
+# ── Request logging middleware ─────────────────────────────────────────
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.time()
+    logger.info(f"> {request.method} {request.url.path} from {request.client.host}")
     try:
-        if not current_jsession:
-            current_jsession = get_jsession()
-            if not current_jsession:
-                logger.warning(f"Cannot fetch device info for {dev_id}: No valid session")
-                return None, None
-        url = f"{BASE_URL}/StandardApiAction_getDeviceByVehicle.action"
-        params = {"jsession": current_jsession, "devIdno": dev_id}
-        response = requests.get(url, params=params, verify=False, timeout=10)
-        data = response.json()
-        if data.get("result") == 0 and data.get("devices"):
-            plate = data["devices"][0].get("vid") or data["devices"][0].get("vehi_idno")
-            logger.debug(f"Fetched device info for {dev_id}: plate={plate}")
-            return plate, data["devices"][0]
-        else:
-            logger.warning(f"No device info found for {dev_id}: {data.get('result')}")
+        response = await call_next(request)
+        duration = (time.time() - start) * 1000
+        logger.info(f"< {request.method} {request.url.path} - {response.status_code} ({duration:.2f}ms)")
+        return response
     except Exception as e:
-        logger.error(f"Failed to fetch device info for {dev_id}: {e}")
-    return None, None
+        logger.error(f"[ERR] {request.method} {request.url.path} - Error: {str(e)}")
+        raise
 
+# ── GPS Worker ─────────────────────────────────────────────────────────
 
-def fetch_gps_data():
-    """Fetch GPS data for all buses."""
-    global current_jsession
-    if not current_jsession:
-        current_jsession = get_jsession()
-        if not current_jsession:
-            logger.error("Cannot fetch GPS data: No valid Fleet API session")
-            return
-
-    for dev_id in DEVICE_IDS:
-        url = f"{BASE_URL}/StandardApiAction_getDeviceStatus.action"
-        params = {
-            "jsession": current_jsession,
-            "devIdno": dev_id,
-            "toMap": 1,
-            "language": "en"
-        }
-        try:
-            response = requests.get(url, params=params, verify=False, timeout=10)
-            data = response.json()
-
-            if data.get("result") == 0 and "status" in data and data["status"]:
-                device_status = data["status"][0]
-                lng = float(device_status.get("mlng", 0))
-                lat = float(device_status.get("mlat", 0))
-                speed = float(device_status.get("sp", 0)) / 10.0
-                online = device_status.get("ol") == 1
-
-                if lat != 0 and lng != 0:
-                    live_state[dev_id].update({
-                        "online": online,
-                        "latitude": lat,
-                        "longitude": lng,
-                        "speed_kmh": speed,
-                        "last_update": time.time()
-                    })
-                    logger.debug(f"Updated GPS for {dev_id}: lat={lat}, lng={lng}, speed={speed} km/h, online={online}")
-                else:
-                    logger.warning(f"Invalid coordinates for {dev_id}: lat={lat}, lng={lng}")
-            else:
-                logger.warning(f"No GPS status data for {dev_id}: result={data.get('result')}")
-
-        except requests.exceptions.Timeout:
-            logger.error(f"GPS update timeout for {dev_id}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"GPS update network error for {dev_id}: {e}")
-        except Exception as e:
-            logger.exception(f"GPS update unexpected error for {dev_id}: {e}")
-
-
-def gps_worker():
-    """Continuously fetch GPS data in background."""
+def _gps_worker():
     logger.info("Starting GPS worker thread...")
     while True:
         try:
-            fetch_gps_data()
+            results = fleet_client.fetch_all_gps()
+            with _live_lock:
+                for dev_id, status in results.items():
+                    if dev_id not in live_state:
+                        continue
+                    lng = float(status.get("mlng", 0))
+                    lat = float(status.get("mlat", 0))
+                    speed = float(status.get("sp", 0)) / 10.0
+                    online = status.get("ol") == 1
+                    if lat != 0 and lng != 0:
+                        live_state[dev_id].update({
+                            "online": online,
+                            "latitude": lat,
+                            "longitude": lng,
+                            "speed_kmh": speed,
+                            "last_update": time.time(),
+                        })
         except Exception as e:
             logger.exception(f"Critical GPS worker error: {e}")
         time.sleep(5)
 
-# ------------------ BROADCASTING ------------------
+# ── WebSocket broadcast ────────────────────────────────────────────────
 
-async def broadcast_update():
-    """Broadcast live state updates to WebSocket clients."""
-    if websocket_clients:
-        # Convert live_state dict to array format matching /api/liveplate_all
-        result = []
-        for dev in DEVICE_IDS:
-            plate, device_info = fetch_device_info(dev)
-            entry = {
-                "gps": live_state.get(dev),
-                "plate_number": plate or live_state.get(dev, {}).get("plate_number"),
-                "device_info": device_info,
-                "device_id": dev,
-                "device_name": dev,
-            }
-            result.append(entry)
-        
-        message = json.dumps(result)
-        disconnected_clients = []
+async def _periodic_broadcast():
+    logger.info("WebSocket broadcast task started")
+    while True:
+        try:
+            await asyncio.sleep(5)
+            result = _build_device_entries()
+            await ws_manager.broadcast(json.dumps(result))
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.exception(f"Error in periodic broadcast: {e}")
 
-        for client in websocket_clients:
-            try:
-                await client.send_text(message)
-            except Exception:
-                disconnected_clients.append(client)
+def _build_device_entries() -> list[dict]:
+    entries = []
+    for dev in DEVICE_IDS:
+        with _live_lock:
+            state = live_state.get(dev, {}).copy()
+        plate, device_info = fleet_client.get_device_info(dev)
+        entries.append({
+            "gps": state,
+            "plate_number": plate or state.get("plate_number"),
+            "device_info": device_info,
+            "device_id": dev,
+            "device_name": dev,
+        })
+    return entries
 
-        for client in disconnected_clients:
-            websocket_clients.remove(client)
+# ── MJPEG Streaming ────────────────────────────────────────────────────
 
-# ------------------ WEBSOCKET ------------------
+def _stream_cleanup_worker():
+    while True:
+        time.sleep(10)
+        stream_manager.cleanup()
 
-@app.websocket("/ws/live")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    websocket_clients.add(websocket)
-    try:
-        # Send initial data in array format matching /api/liveplate_all
-        result = []
-        for dev in DEVICE_IDS:
-            plate, device_info = fetch_device_info(dev)
-            entry = {
-                "gps": live_state.get(dev),
-                "plate_number": plate or live_state.get(dev, {}).get("plate_number"),
-                "device_info": device_info,
-                "device_id": dev,
-                "device_name": dev,
-            }
-            result.append(entry)
-        await websocket.send_text(json.dumps(result))
-        
-        while True:
-            await asyncio.sleep(1)
-            try:
-                _ = await websocket.receive_text()
-            except WebSocketDisconnect:
-                break
-            except Exception:
-                break
-    finally:
-        websocket_clients.remove(websocket)
+def _mjpeg_frames(device_id: str, channel: int) -> Generator[bytes, None, None]:
+    key = (device_id, channel)
+    rtmp_url = fleet_client.build_rtmp_url(device_id, channel, stream=1)
+    if not rtmp_url:
+        return
 
-# ------------------ API ENDPOINTS ------------------
+    proc = stream_manager.get(key)
+    if proc is None:
+        cmd = (
+            f'ffmpeg -hide_banner -loglevel error -re -r 10 -i "{rtmp_url}" '
+            f"-an -vf scale=640:360 -pix_fmt bgr24 -f rawvideo -"
+        )
+        proc = subprocess.Popen(
+            shlex.split(cmd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=10**7,
+        )
+        stream_manager.set(key, proc)
+
+    frame_size = 640 * 360 * 3
+    while True:
+        try:
+            raw_frame = proc.stdout.read(frame_size)
+        except (ValueError, OSError):
+            break
+        if not raw_frame or len(raw_frame) < frame_size:
+            break
+        frame = np.frombuffer(raw_frame, dtype=np.uint8).reshape((360, 640, 3))
+        success, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 55])
+        if not success:
+            continue
+        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
+
+# ── Endpoints ──────────────────────────────────────────────────────────
 
 @app.get("/")
 async def root():
@@ -409,27 +350,27 @@ async def root():
             "login": "/auth/login",
             "live_data": "/api/live",
             "device_gps": "/api/gps/{device_id}",
-            "video_stream": "/api/video/{device_id}/{channel}/{stream}"
+            "video_stream_rtmp": "/api/video/{device_id}/{channel}/{stream}",
+            "video_stream_mjpeg": "/api/video_feed/{device_id}/{channel}",
+            "video_info": "/api/video_info/{device_id}",
+            "devices_status": "/api/devices/status",
+            "all_buses_data": "/api/liveplate_all",
         },
         "available_devices": DEVICE_IDS,
-        "authentication": "Bearer token required for API endpoints"
+        "authentication": "Bearer token required for API endpoints",
     }
 
-# ------------------ AUTHENTICATION ENDPOINTS ------------------
-
 @app.post("/auth/login", response_model=TokenResponse)
-async def login(credentials: LoginRequest):
-    """
-    Authenticate user and return JWT access token.
-    
-    Default credentials:
-    - admin/admin123 (full access)
-    - driver/driver123 (driver access)
-    - parent/parent123 (parent access)
-    """
+async def login(credentials: LoginRequest, request: Request):
+    ip = request.client.host if request.client else "unknown"
+    if check_login_rate_limit(ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please try again later.",
+        )
+
     logger.info(f"Login attempt for user: {credentials.username}")
     user = USERS_DB.get(credentials.username)
-    
     if not user or not verify_password(credentials.password, user["hashed_password"]):
         logger.warning(f"Failed login attempt for user: {credentials.username}")
         raise HTTPException(
@@ -437,166 +378,55 @@ async def login(credentials: LoginRequest):
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    logger.info(f"Successful login for user: {credentials.username} (role: {user['role']})")
-    
-    # Create access token with user info
+
     access_token = create_access_token(
-        data={
-            "sub": user["username"],
-            "role": user["role"],
-            "email": user["email"]
-        }
+        data={"sub": user["username"], "role": user["role"], "email": user["email"]}
     )
-    
-    # Return token and user info (excluding password)
     return {
         "access_token": access_token,
         "token_type": "bearer",
         "user": {
             "username": user["username"],
             "role": user["role"],
-            "email": user["email"]
-        }
+            "email": user["email"],
+        },
     }
 
 @app.get("/auth/me")
 async def get_current_user_info(current_user: dict = Depends(get_current_user)):
-    """Get current authenticated user information."""
     return {
         "username": current_user.get("sub"),
         "role": current_user.get("role"),
-        "email": current_user.get("email")
+        "email": current_user.get("email"),
     }
-
-# ------------------ PROTECTED API ENDPOINTS ------------------
 
 @app.get("/api/live")
 async def api_live(current_user: dict = Depends(get_current_user)):
-    """Get live GPS data for all devices (requires authentication)."""
-    return JSONResponse(content=live_state)
+    with _live_lock:
+        return JSONResponse(content=live_state.copy())
 
 @app.get("/api/gps/{device_id}")
 async def api_gps_device(device_id: str, current_user: dict = Depends(get_current_user)):
-    """Get GPS data for specific device (requires authentication)."""
-    if device_id not in live_state:
-        return JSONResponse(
-            content={"error": "Device not found", "valid_ids": DEVICE_IDS},
-            status_code=404
-        )
-    return JSONResponse(content=live_state[device_id])
+    with _live_lock:
+        if device_id not in live_state:
+            return JSONResponse(
+                content={"error": "Device not found", "valid_ids": DEVICE_IDS},
+                status_code=404,
+            )
+        return JSONResponse(content=live_state[device_id].copy())
 
-@app.get("/api/video/{device_id}/{channel}/{stream}")
-async def api_video_stream(
-    device_id: str, 
-    channel: int, 
-    stream: int,
-    current_user: dict = Depends(get_current_user)
-):
-    """Get RTSP video stream URL (requires authentication)."""
-    if device_id not in DEVICE_IDS:
-        return JSONResponse(
-            content={"error": "Device not found", "valid_ids": DEVICE_IDS},
-            status_code=404
-        )
-
-    if channel not in [1, 2, 3, 4]:
-        return JSONResponse(
-            content={"error": "Invalid channel. Must be 1–4"},
-            status_code=400
-        )
-
-    if stream not in [0, 1]:
-        return JSONResponse(
-            content={"error": "Invalid stream. Must be 0 or 1"},
-            status_code=400
-        )
-
-    rtsp_url = build_rtsp_url(device_id, channel, stream)
-    if not rtsp_url:
-        return JSONResponse(
-            content={"error": "Failed to generate RTSP URL"},
-            status_code=500
-        )
-
-    return JSONResponse(content={
-        "device_id": device_id,
-        "channel": channel,
-        "stream": stream,
-        "rtsp_url": rtsp_url,
-        "note": "Use VLC or convert to HLS for browser playback."
-    })
-
-@app.get("/api/health")
-async def health_check():
-    """Enhanced health check endpoint with system metrics."""
-    try:
-        # Count online devices
-        devices_online = sum(1 for dev in live_state.values() if dev["online"])
-        
-        # Calculate last update times
-        last_updates = [dev.get("last_update", 0) for dev in live_state.values()]
-        oldest_update = min(last_updates) if last_updates else 0
-        newest_update = max(last_updates) if last_updates else 0
-        time_since_last_update = time.time() - newest_update if newest_update else 0
-        
-        # Check Fleet API session
-        has_session = current_jsession is not None
-        
-        # Overall health status
-        is_healthy = (
-            devices_online > 0 and 
-            has_session and 
-            time_since_last_update < 60  # Data should be < 60 seconds old
-        )
-        
-        health_data = {
-            "status": "healthy" if is_healthy else "degraded",
-            "timestamp": datetime.utcnow().isoformat(),
-            "uptime_seconds": time.time() - start_time,
-            "fleet_api": {
-                "connected": has_session,
-                "session_valid": has_session
-            },
-            "devices": {
-                "total": len(DEVICE_IDS),
-                "online": devices_online,
-                "offline": len(DEVICE_IDS) - devices_online,
-                "device_ids": DEVICE_IDS
-            },
-            "gps_data": {
-                "last_update_seconds_ago": round(time_since_last_update, 2),
-                "oldest_data_age": round(time.time() - oldest_update, 2) if oldest_update else None,
-                "is_fresh": time_since_last_update < 30
-            },
-            "websocket": {
-                "active_connections": len(websocket_clients)
-            },
-            "environment": ENVIRONMENT
-        }
-        
-        logger.debug(f"Health check: {health_data['status']}")
-        return health_data
-        
-    except Exception as e:
-        logger.exception("Health check error")
-        return {
-            "status": "error",
-            "error": str(e),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-
-# --- Add endpoints expected by the frontend ---
 @app.get("/api/liveplate")
-def api_live_with_plate(device_id: str | None = None, current_user: dict = Depends(get_current_user)):
-    """Get live GPS data with plate number (requires authentication)."""
+async def api_live_with_plate(device_id: str | None = None, current_user: dict = Depends(get_current_user)):
     dev = device_id or (DEVICE_IDS[0] if DEVICE_IDS else None)
-    if not dev or dev not in live_state:
-        return JSONResponse(content={"error": "unknown device_id"}, status_code=404)
-    # Fetch plate and device info from fleet API (best-effort)
-    plate, device_info = fetch_device_info(dev)
+    if not dev:
+        return JSONResponse(content={"error": "No devices configured"}, status_code=404)
+    with _live_lock:
+        if dev not in live_state:
+            return JSONResponse(content={"error": "unknown device_id"}, status_code=404)
+        state = live_state[dev].copy()
+    plate, device_info = fleet_client.get_device_info(dev)
     return JSONResponse(content={
-        "gps": live_state[dev],
+        "gps": state,
         "plate_number": plate,
         "device_info": device_info,
         "device_id": dev,
@@ -604,62 +434,150 @@ def api_live_with_plate(device_id: str | None = None, current_user: dict = Depen
     })
 
 @app.get("/api/liveplate_all")
-def api_liveplate_all(current_user: dict = Depends(get_current_user)):
-    """Get live GPS data for all devices with plate numbers (requires authentication)."""
-    result = []
-    for dev in DEVICE_IDS:
-        plate, device_info = fetch_device_info(dev)
-        entry = {
-            "gps": live_state.get(dev),
-            "plate_number": plate or live_state.get(dev, {}).get("plate_number"),
-            "device_info": device_info,
-            "device_id": dev,
-            "device_name": dev,
+async def api_liveplate_all(current_user: dict = Depends(get_current_user)):
+    return JSONResponse(content=_build_device_entries())
+
+@app.get("/api/video/{device_id}/{channel}/{stream}")
+async def api_video_stream(
+    device_id: str, channel: int, stream: int,
+    current_user: dict = Depends(get_current_user),
+):
+    if device_id not in DEVICE_IDS:
+        raise HTTPException(status_code=404, detail=f"Device {device_id} not found")
+    if channel not in [1, 2, 3, 4]:
+        raise HTTPException(status_code=400, detail="Invalid channel. Must be 1-4")
+    if stream not in [0, 1]:
+        raise HTTPException(status_code=400, detail="Invalid stream. Must be 0 or 1")
+
+    rtmp_url = fleet_client.build_rtmp_url(device_id, channel, stream)
+    if not rtmp_url:
+        raise HTTPException(status_code=500, detail="Failed to generate RTMP URL")
+    return JSONResponse(content={
+        "device_id": device_id, "channel": channel, "stream": stream,
+        "rtmp_url": rtmp_url,
+        "note": "Use VLC or convert to HLS/MJPEG for browser playback.",
+    })
+
+@app.get("/api/video_feed/{device_id}/{channel}")
+async def api_video_feed(device_id: str, channel: int, request: Request):
+    if channel not in [0, 1, 2, 3]:
+        raise HTTPException(status_code=400, detail="Invalid channel. Must be 0-3")
+    if not fleet_client.get_online_status(device_id):
+        raise HTTPException(status_code=503, detail=f"Device {device_id} is currently offline")
+
+    if "*" not in ALLOWED_ORIGINS:
+        origin = request.headers.get("origin") or request.headers.get("referer") or ""
+        if origin:
+            parsed = origin.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+            allowed = any(
+                parsed == o_clean or parsed.endswith("." + o_clean)
+                for o_clean in [
+                    o.replace("https://", "").replace("http://", "").split("/")[0].split(":")[0]
+                    for o in ALLOWED_ORIGINS
+                ]
+            )
+            if not allowed:
+                logger.warning("MJPEG origin not allowed: %s", origin)
+                raise HTTPException(status_code=403, detail="Origin not allowed")
+
+    rtmp_url = fleet_client.build_rtmp_url(device_id, channel, stream=1)
+    if not rtmp_url:
+        raise HTTPException(status_code=500, detail="Failed to generate streaming URL")
+    return StreamingResponse(
+        _mjpeg_frames(device_id, channel),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+@app.get("/api/devices/status")
+async def api_devices_status(current_user: dict = Depends(get_current_user)):
+    result = {}
+    for device_id in DEVICE_IDS:
+        online = fleet_client.get_online_status(device_id)
+        plate, device_info = fleet_client.get_device_info(device_id)
+        result[device_id] = {
+            "online": online,
+            "plate_number": plate or f"BUS-{device_id}",
+            "channels": {0: online, 1: online, 2: online, 3: online},
+            "last_check": datetime.utcnow().isoformat(),
         }
-        result.append(entry)
     return JSONResponse(content=result)
 
-# ------------------ STARTUP ------------------
+@app.get("/api/video_info/{device_id}")
+async def api_video_info(device_id: str, current_user: dict = Depends(get_current_user)):
+    if device_id not in DEVICE_IDS:
+        raise HTTPException(status_code=404, detail=f"Device {device_id} not found")
+    online = fleet_client.get_online_status(device_id)
+    plate, device_info = fleet_client.get_device_info(device_id)
+    channels = [
+        {
+            "channel": ch,
+            "mjpeg_url": f"/api/video_feed/{device_id}/{ch}",
+            "rtmp_url": fleet_client.build_rtmp_url(device_id, ch, 1),
+            "available": online,
+        }
+        for ch in [0, 1, 2, 3]
+    ]
+    return JSONResponse(content={
+        "device_id": device_id, "plate_number": plate, "online": online,
+        "channels": channels,
+        "note": "Use mjpeg_url for browser playback, rtmp_url for VLC/external players",
+    })
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize background tasks on startup."""
-    logger.info("=" * 60)
-    logger.info("🚀 Bus Management API Starting...")
-    logger.info(f"Environment: {ENVIRONMENT}")
-    logger.info(f"Monitoring {len(DEVICE_IDS)} device(s): {', '.join(DEVICE_IDS)}")
-    logger.info(f"CORS origins: {', '.join(ALLOWED_ORIGINS)}")
-    logger.info(f"API running on: http://{API_HOST}:{API_PORT}")
-    logger.info("=" * 60)
-    
-    # Start GPS worker thread
-    logger.info("Starting GPS worker thread...")
-    gps_thread = threading.Thread(target=gps_worker, daemon=True)
-    gps_thread.start()
+@app.get("/api/health")
+async def health_check():
+    with _live_lock:
+        devices_online = sum(1 for dev in live_state.values() if dev["online"])
+        last_updates = [dev.get("last_update", 0) for dev in live_state.values()]
+    newest_update = max(last_updates) if last_updates else 0
+    time_since_update = time.time() - newest_update if newest_update else 0
+    has_session = fleet_client._jsession is not None
 
-    # Start WebSocket broadcast task
-    logger.info("Starting WebSocket broadcast task...")
-    asyncio.create_task(periodic_broadcast())
-    
-    logger.info("✓ All services started successfully")
+    is_healthy = devices_online > 0 and has_session and time_since_update < 60
+    return {
+        "status": "healthy" if is_healthy else "degraded",
+        "timestamp": datetime.utcnow().isoformat(),
+        "uptime_seconds": time.time() - server_start_time,
+        "fleet_api": {"connected": has_session},
+        "devices": {
+            "total": len(DEVICE_IDS),
+            "online": devices_online,
+            "offline": len(DEVICE_IDS) - devices_online,
+        },
+        "gps_data": {
+            "last_update_seconds_ago": round(time_since_update, 2),
+            "is_fresh": time_since_update < 30,
+        },
+        "websocket": {"active_connections": ws_manager.count},
+        "environment": ENVIRONMENT,
+    }
 
-async def periodic_broadcast():
-    """Broadcast GPS updates to WebSocket clients every 5 seconds."""
-    logger.info("WebSocket broadcast task started")
-    while True:
-        try:
-            await asyncio.sleep(5)
-            await broadcast_update()
-        except Exception as e:
-            logger.exception(f"Error in periodic broadcast: {e}")
+@app.websocket("/ws/live")
+async def websocket_endpoint(websocket: WebSocket):
+    origin = websocket.headers.get("origin") or ""
+    if "*" not in ALLOWED_ORIGINS and origin:
+        parsed = origin.replace("https://", "").replace("http://", "").replace("ws://", "").replace("wss://", "").split(":")[0]
+        allowed = any(
+            parsed == o_clean or parsed.endswith("." + o_clean)
+            for o_clean in [
+                o.replace("https://", "").replace("http://", "").replace("ws://", "").replace("wss://", "").split(":")[0]
+                for o in ALLOWED_ORIGINS
+            ]
+        )
+        if not allowed:
+            logger.warning("WebSocket origin not allowed: %s", origin)
+            await websocket.close(code=1008)
+            return
 
-# ------------------ MAIN ------------------
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        app, 
-        host=API_HOST, 
-        port=API_PORT, 
-        log_level="info" if ENVIRONMENT == "development" else "warning"
-    )
+    await websocket.accept()
+    await ws_manager.add(websocket)
+    try:
+        result = _build_device_entries()
+        await websocket.send_text(json.dumps(result))
+        while True:
+            await asyncio.sleep(1)
+            try:
+                await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
+    finally:
+        await ws_manager.remove(websocket)

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Bus, MapPin, Clock, Edit, Save, X, Trash2 } from "lucide-react";
 import { StopsList } from "./StopsList";
+import { StopPickerMap } from "@/components/stop-picker-map";
 import { FirestoreService } from "@/lib/firestore";
 import {
   Dialog,
@@ -50,7 +51,7 @@ export function FleetCard({
     // Fetch current bus data from Firestore if user is available
     if (user) {
       try {
-        const firestoreService = new FirestoreService(user.uid);
+        const firestoreService = new FirestoreService(user.sub);
         const allBuses = await firestoreService.getAllBuses();
         const busData = allBuses.find(b => b.busId === deviceId);
         
@@ -114,52 +115,52 @@ export function FleetCard({
 
   return (
     <>
-    <Card className="shadow-lg hover:shadow-2xl transition-all duration-300 border border-gray-200 bg-white overflow-hidden">
-      {/* Status Bar */}
-      <div className={`h-2 ${overview.status.ol === 1 ? 'bg-green-500' : 'bg-red-500'}`}></div>
+    <Card className="glass-panel hover:border-[#5e5ce6]/40 transition-all duration-300 relative overflow-hidden rounded-2xl border-white/5 shadow-2xl">
+      {/* Glow status bar */}
+      <div className={`h-1.5 w-full transition-colors ${overview.status.ol === 1 ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' : 'bg-white/10'}`}></div>
       
       <CardHeader className="pb-4">
         {/* Header Row */}
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-center gap-3">
-            <div className={`p-3 rounded-lg ${overview.status.ol === 1 ? 'bg-green-100' : 'bg-gray-100'}`}>
-              <Bus className={`h-6 w-6 ${overview.status.ol === 1 ? 'text-green-600' : 'text-gray-500'}`} />
+            <div className={`p-3 rounded-xl border ${overview.status.ol === 1 ? 'bg-green-500/10 border-green-500/20' : 'bg-white/5 border-white/10'}`}>
+              <Bus className={`h-6 w-6 ${overview.status.ol === 1 ? 'text-green-400' : 'text-[#a3b8cc]/50'}`} />
             </div>
             <div>
-              <CardTitle className="text-xl font-bold text-gray-900">
+              <CardTitle className="text-xl font-bold text-white">
                 {busData?.plateNumber || 'N/A'}
               </CardTitle>
-              <CardDescription className="text-sm text-gray-600 mt-0.5">
-                Device: {overview.status.id || "Unknown"}
+              <CardDescription className="text-xs text-[#a3b8cc]/50 mt-0.5 font-mono">
+                Hardware ID: {overview.status.id || "Unknown"}
               </CardDescription>
             </div>
           </div>
           
           {/* Status Badge, Edit and Delete Buttons */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <Button
               variant="ghost"
               size="sm"
               onClick={handleEditClick}
-              className="h-8 w-8 p-0 hover:bg-blue-50"
+              className="h-8 w-8 p-0 text-[#a3b8cc] hover:bg-white/5 hover:text-white rounded-lg"
               title="Edit bus info"
             >
-              <Edit className="h-4 w-4 text-blue-600" />
+              <Edit className="h-4 w-4" />
             </Button>
             <Button
               variant="ghost"
               size="sm"
               onClick={() => onDeleteBus && onDeleteBus(overview.status.id)}
-              className="h-8 w-8 p-0 hover:bg-red-50"
+              className="h-8 w-8 p-0 text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-lg"
               title="Delete bus"
             >
-              <Trash2 className="h-4 w-4 text-red-600" />
+              <Trash2 className="h-4 w-4" />
             </Button>
             <Badge 
               variant={overview.status.ol === 1 ? "default" : "secondary"} 
-              className={`text-xs ${overview.status.ol === 1 ? 'bg-green-600' : 'bg-gray-500'}`}
+              className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${overview.status.ol === 1 ? 'bg-green-500 text-white' : 'bg-white/10 text-[#a3b8cc]/60'}`}
             >
-              {overview.status.ol === 1 ? 'Online' : 'Offline'}
+              {overview.status.ol === 1 ? 'ONLINE' : 'OFFLINE'}
             </Badge>
           </div>
         </div>
@@ -167,7 +168,7 @@ export function FleetCard({
         {/* Info Tags */}
         <div className="flex flex-wrap gap-2">
           {overview.assignment?.routeId && (
-            <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-orange-50 text-orange-700 border border-orange-200">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-[#bf5af2]/10 text-[#bf5af2] border border-[#bf5af2]/20">
               Route: {overview.assignment.routeId}
             </span>
           )}
@@ -176,11 +177,11 @@ export function FleetCard({
 
       <CardContent className="space-y-4 pt-0">
         {/* Location Info */}
-        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+        <div className="bg-white/5 rounded-xl p-3 border border-white/5">
           <div className="flex items-start gap-2">
-            <MapPin className="h-4 w-4 text-gray-500 mt-0.5 flex-shrink-0" />
+            <MapPin className="h-4 w-4 text-[#a3b8cc] mt-0.5 flex-shrink-0" />
             <div className="flex-1 min-w-0">
-              <p className="text-xs text-gray-600 break-words">{overview.address}</p>
+              <p className="text-xs text-[#d4e4fb]/80 break-words font-medium">{overview.address || "Coordinates unavailable"}</p>
             </div>
           </div>
         </div>
@@ -198,34 +199,53 @@ export function FleetCard({
         </div>
 
         {/* Add Stop Section */}
-        <div className="border-t border-gray-200 pt-4">
-          <p className="text-sm font-semibold text-gray-700 mb-3">Add New Stop</p>
+        <div className="border-t border-white/5 pt-4 space-y-3">
+          <p className="text-xs font-semibold text-white uppercase tracking-wider">Add New Stop</p>
           <div className="space-y-2">
             <input
               type="text"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
-              placeholder="Stop name"
+              className="w-full bg-[#0d1c2d] border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-[#a3b8cc]/30 focus:ring-2 focus:ring-[#5e5ce6] focus:border-[#5e5ce6] transition-all"
+              placeholder="Stop label"
               value={newStop?.name || ""}
               onChange={e => setNewStop({ ...newStop, name: e.target.value })}
+            />
+            <StopPickerMap
+              lat={newStop?.latitude || ""}
+              lng={newStop?.longitude || ""}
+              onLocationSelect={(lat, lng, address) =>
+                setNewStop({
+                  name: newStop?.name || address || "",
+                  latitude: lat.toString(),
+                  longitude: lng.toString(),
+                })
+              }
+              busPosition={
+                overview.status?.mlat && overview.status?.mlng
+                  ? { lat: parseFloat(overview.status.mlat), lng: parseFloat(overview.status.mlng) }
+                  : undefined
+              }
+              busLabel={overview.plate_number || "Bus"}
             />
             <div className="grid grid-cols-2 gap-2">
               <input
                 type="number"
-                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                step="any"
+                className="bg-[#0d1c2d] border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-[#a3b8cc]/30 focus:ring-2 focus:ring-[#5e5ce6] focus:border-[#5e5ce6] transition-all"
                 placeholder="Latitude"
                 value={newStop?.latitude || ""}
                 onChange={e => setNewStop({ ...newStop, latitude: e.target.value })}
               />
               <input
                 type="number"
-                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                step="any"
+                className="bg-[#0d1c2d] border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder:text-[#a3b8cc]/30 focus:ring-2 focus:ring-[#5e5ce6] focus:border-[#5e5ce6] transition-all"
                 placeholder="Longitude"
                 value={newStop?.longitude || ""}
                 onChange={e => setNewStop({ ...newStop, longitude: e.target.value })}
               />
             </div>
             <button
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+              className="w-full bg-[#5e5ce6] hover:bg-[#4d4ad5] text-white px-4 py-2 rounded-xl text-sm font-bold transition-all duration-300 disabled:bg-white/5 disabled:text-white/20 disabled:cursor-not-allowed neon-bloom-indigo"
               onClick={() => {
                 if (newStop && newStop.name && newStop.latitude && newStop.longitude) {
                   addStopToBus(newStop);
@@ -233,7 +253,7 @@ export function FleetCard({
               }}
               disabled={!newStop?.name || !newStop?.latitude || !newStop?.longitude}
             >
-              Add Stop
+              Add Stop Point
             </button>
           </div>
         </div>
@@ -242,98 +262,98 @@ export function FleetCard({
 
     {/* Edit Bus Modal */}
     <Dialog open={editModalOpen} onOpenChange={setEditModalOpen}>
-      <DialogContent className="sm:max-w-[500px] bg-white">
+      <DialogContent className="sm:max-w-[500px] glass-panel-heavy border-white/10 text-white rounded-2xl">
         <DialogHeader>
-          <DialogTitle className="text-xl font-bold text-blue-900">Edit Bus Information</DialogTitle>
+          <DialogTitle className="text-xl font-bold text-white">Edit Bus Registry</DialogTitle>
         </DialogHeader>
         <div className="grid gap-4 py-4">
           <div className="grid grid-cols-4 items-center gap-4">
-            <label className="text-right text-sm font-semibold text-gray-700">
+            <label className="text-right text-xs font-semibold text-[#a3b8cc] uppercase tracking-wider">
               Bus ID
             </label>
             <input
               type="text"
               value={editingBus.busId}
               disabled
-              className="col-span-3 border rounded px-3 py-2 text-sm bg-gray-100 cursor-not-allowed"
+              className="col-span-3 bg-white/5 border border-white/5 rounded-xl px-3 py-2 text-sm text-[#a3b8cc]/70 cursor-not-allowed font-mono"
             />
           </div>
           <div className="grid grid-cols-4 items-center gap-4">
-            <label className="text-right text-sm font-semibold text-gray-700">
+            <label className="text-right text-xs font-semibold text-[#a3b8cc] uppercase tracking-wider">
               Plate Number <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={editingBus.plateNumber}
               onChange={(e) => setEditingBus({ ...editingBus, plateNumber: e.target.value })}
-              className="col-span-3 border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300"
+              className="col-span-3 bg-[#0d1c2d] border border-white/10 text-white rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-[#5e5ce6] focus:border-[#5e5ce6] transition-all"
               placeholder="Enter plate number"
             />
           </div>
           <div className="grid grid-cols-4 items-center gap-4">
-            <label className="text-right text-sm font-semibold text-gray-700">
+            <label className="text-right text-xs font-semibold text-[#a3b8cc] uppercase tracking-wider">
               Capacity <span className="text-red-500">*</span>
             </label>
             <input
               type="number"
               value={editingBus.capacity}
               onChange={(e) => setEditingBus({ ...editingBus, capacity: e.target.value })}
-              className="col-span-3 border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300"
+              className="col-span-3 bg-[#0d1c2d] border border-white/10 text-white rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-[#5e5ce6] focus:border-[#5e5ce6] transition-all"
               placeholder="Enter capacity"
               min="1"
             />
           </div>
           <div className="grid grid-cols-4 items-center gap-4">
-            <label className="text-right text-sm font-semibold text-gray-700">
+            <label className="text-right text-xs font-semibold text-[#a3b8cc] uppercase tracking-wider">
               Model
             </label>
             <input
               type="text"
               value={editingBus.model}
               onChange={(e) => setEditingBus({ ...editingBus, model: e.target.value })}
-              className="col-span-3 border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300"
-              placeholder="Enter model"
+              className="col-span-3 bg-[#0d1c2d] border border-white/10 text-white rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-[#5e5ce6] focus:border-[#5e5ce6] transition-all"
+              placeholder="Enter model name"
             />
           </div>
           <div className="grid grid-cols-4 items-center gap-4">
-            <label className="text-right text-sm font-semibold text-gray-700">
+            <label className="text-right text-xs font-semibold text-[#a3b8cc] uppercase tracking-wider">
               Year
             </label>
             <input
               type="number"
               value={editingBus.year}
               onChange={(e) => setEditingBus({ ...editingBus, year: e.target.value })}
-              className="col-span-3 border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300"
-              placeholder="Enter year"
+              className="col-span-3 bg-[#0d1c2d] border border-white/10 text-white rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-[#5e5ce6] focus:border-[#5e5ce6] transition-all"
+              placeholder="Enter fabrication year"
               min="1900"
               max="2100"
             />
           </div>
           <div className="grid grid-cols-4 items-start gap-4">
-            <label className="text-right text-sm font-semibold text-gray-700 pt-2">
+            <label className="text-right text-xs font-semibold text-[#a3b8cc] uppercase tracking-wider pt-2">
               Notes
             </label>
             <textarea
               value={editingBus.notes}
               onChange={(e) => setEditingBus({ ...editingBus, notes: e.target.value })}
-              className="col-span-3 border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-blue-300 min-h-[80px]"
-              placeholder="Enter any notes about this bus"
+              className="col-span-3 bg-[#0d1c2d] border border-white/10 text-white rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-[#5e5ce6] focus:border-[#5e5ce6] transition-all min-h-[80px]"
+              placeholder="Add technical notes"
             />
           </div>
         </div>
         <DialogFooter className="gap-2">
           <DialogClose asChild>
-            <Button variant="outline" className="gap-2">
-              <X className="h-4 w-4" />
+            <Button variant="outline" className="border-white/10 hover:bg-white/5 text-white">
+              <X className="h-4 w-4 mr-1" />
               Cancel
             </Button>
           </DialogClose>
           <Button
             onClick={handleSaveBus}
             disabled={saving || !editingBus.busId || !editingBus.plateNumber}
-            className="bg-blue-600 hover:bg-blue-700 text-white gap-2"
+            className="bg-[#5e5ce6] hover:bg-[#4d4ad5] text-white gap-2 rounded-xl font-semibold neon-bloom-indigo"
           >
-            <Save className="h-4 w-4" />
+            <Save className="h-4 w-4 mr-1" />
             {saving ? 'Saving...' : 'Save Changes'}
           </Button>
         </DialogFooter>

@@ -45,16 +45,6 @@ next-env.d.ts
 backend/logs/
 *.log
 
-# Security - do not commit
-backend/.env
-*.json
-!tsconfig.json
-!package.json
-!package-lock.json
-!pnpm-lock.yaml
-!components.json
-!next-env.d.ts
-
 # Python Virtual Environments
 .venv/
 backend/.venv/

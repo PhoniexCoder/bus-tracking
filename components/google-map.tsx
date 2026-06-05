@@ -1,10 +1,8 @@
-
 import React from "react";
 
 declare global {
   interface Window {
     google?: any;
-    initMap?: () => void;
   }
 }
 
@@ -16,88 +14,60 @@ export interface GoogleMapProps {
   center?: { lat: number; lng: number };
 }
 
+const darkMapStyle = [
+  { elementType: "geometry", stylers: [{ color: "#010f1f" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#010f1f" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#74889b" }] },
+  { featureType: "administrative.locality", elementType: "labels.text.fill", stylers: [{ color: "#a3b8cc" }] },
+  { featureType: "poi", elementType: "labels.text.fill", stylers: [{ color: "#a3b8cc" }] },
+  { featureType: "poi.park", elementType: "geometry", stylers: [{ color: "#0b2034" }] },
+  { featureType: "poi.park", elementType: "labels.text.fill", stylers: [{ color: "#74889b" }] },
+  { featureType: "road", elementType: "geometry", stylers: [{ color: "#0a1f33" }] },
+  { featureType: "road", elementType: "geometry.stroke", stylers: [{ color: "#16314c" }] },
+  { featureType: "road", elementType: "labels.text.fill", stylers: [{ color: "#a3b8cc" }] },
+  { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#11263d" }] },
+  { featureType: "road.highway", elementType: "geometry.stroke", stylers: [{ color: "#1f3a57" }] },
+  { featureType: "road.highway", elementType: "labels.text.fill", stylers: [{ color: "#ffffff" }] },
+  { featureType: "transit", elementType: "geometry", stylers: [{ color: "#112131" }] },
+  { featureType: "transit.station", elementType: "labels.text.fill", stylers: [{ color: "#a3b8cc" }] },
+  { featureType: "water", elementType: "geometry", stylers: [{ color: "#010811" }] },
+  { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: "#515c6d" }] },
+  { featureType: "water", elementType: "labels.text.stroke", stylers: [{ color: "#010811" }] },
+];
 
+function createBusContent(color: string, label?: string): HTMLElement {
+  const d = document.createElement("div")
+  d.style.cssText = "display:flex;flex-direction:column;align-items:center"
+  d.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24"><path fill="${color}" stroke="#222" stroke-width="1" d="M12 2C7.03 2 3 6.03 3 11v6c0 1.1.9 2 2 2v1c0 .55.45 1 1 1s1-.45 1-1v-1h8v1c0 .55.45 1 1 1s1-.45 1-1v-1c1.1 0 2-.9 2-2v-6c0-4.97-4.03-9-9-9zm0 2c3.87 0 7 3.13 7 7v6H5v-6c0-3.87 3.13-7 7-7zm-4 9c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm8 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1z"/></svg>`
+  if (label) {
+    const lbl = document.createElement("span")
+    lbl.textContent = label
+    lbl.style.cssText = "font-size:9px;font-weight:700;color:#fff;text-align:center;line-height:1;margin-top:-2px"
+    d.appendChild(lbl)
+  }
+  return d
+}
 
-// --- Animated Google Map Implementation ---
+function createStopContent(color: string): HTMLElement {
+  const d = document.createElement("div")
+  d.innerHTML = `<svg width="28" height="40" viewBox="0 0 28 40"><path d="M14 2C7.37 2 2 7.37 2 14c0 7 12 24 12 24s12-17 12-24c0-6.63-5.37-12-12-12zm0 16c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4z" fill="${color}" stroke="#991b1b" stroke-width="1.5"/></svg>`
+  return d
+}
+
+function createUserContent(): HTMLElement {
+  const d = document.createElement("div")
+  d.innerHTML = `<svg width="28" height="40" viewBox="0 0 28 40"><path d="M14 2C7.37 2 2 7.37 2 14c0 7 12 24 12 24s12-17 12-24c0-6.63-5.37-12-12-12zm0 16c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4z" fill="#dc2626" stroke="#991b1b" stroke-width="2"/></svg>`
+  return d
+}
+
 export const GoogleMap: React.FC<GoogleMapProps> = ({ markers, height = "400px", width = "100%", showTrafficLayer, center }) => {
   const ref = React.useRef<HTMLDivElement>(null);
   const mapRef = React.useRef<any>(null);
   const markerObjs = React.useRef<{ [key: string]: any }>({});
   const trafficLayerRef = React.useRef<any>(null);
   const polylineRef = React.useRef<any>(null);
-  // Store animation state for each bus
   const animationFrameRef = React.useRef<{ [key: string]: number }>({});
 
-  // Helper for SVG icons
-  const busSvg = (color: string) => ({
-    path: "M12 2C7.03 2 3 6.03 3 11v6c0 1.1.9 2 2 2v1c0 .55.45 1 1 1s1-.45 1-1v-1h8v1c0 .55.45 1 1 1s1-.45 1-1v-1c1.1 0 2-.9 2-2v-6c0-4.97-4.03-9-9-9zm0 2c3.87 0 7 3.13 7 7v6H5v-6c0-3.87 3.13-7 7-7zm-4 9c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm8 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1z",
-    fillColor: color,
-    fillOpacity: 1,
-    strokeWeight: 1,
-    strokeColor: '#222',
-    scale: 2,
-    anchor: new window.google.maps.Point(12, 12),
-  });
-  const stopSvg = (color: string) => ({
-    path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z",
-    fillColor: color,
-    fillOpacity: 1,
-    strokeWeight: 1,
-    strokeColor: '#b91c1c',
-    scale: 1.5,
-    anchor: new window.google.maps.Point(12, 22),
-  });
-  const userSvg = () => ({
-    path: "M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z",
-    fillColor: '#dc2626',
-    fillOpacity: 1,
-    strokeWeight: 2,
-    strokeColor: '#991b1b',
-    scale: 1.8,
-    anchor: new window.google.maps.Point(12, 22),
-  });
-
-  // Load Google Maps script and create map ONCE
-  React.useEffect(() => {
-    const loadScript = () => {
-      if (document.getElementById('google-maps-script')) return;
-      const script = document.createElement('script');
-      script.id = 'google-maps-script';
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}`;
-      script.async = true;
-      script.onload = () => initMap();
-      document.body.appendChild(script);
-    };
-
-    const initMap = () => {
-      if (!window.google || !window.google.maps || !ref.current) return;
-      if (!mapRef.current) {
-        mapRef.current = new window.google.maps.Map(ref.current, {
-          center: markers.length > 0 ? { lat: markers[0].lat, lng: markers[0].lng } : { lat: 0, lng: 0 },
-          zoom: 18,
-          mapTypeId: 'terrain',
-        });
-      }
-      updateMarkers(true);
-    };
-
-    if (!window.google || !window.google.maps) {
-      loadScript();
-      window.initMap = initMap;
-    } else {
-      if (!mapRef.current) {
-        mapRef.current = new window.google.maps.Map(ref.current, {
-          center: markers.length > 0 ? { lat: markers[0].lat, lng: markers[0].lng } : { lat: 0, lng: 0 },
-          zoom: 18,
-          mapTypeId: 'terrain',
-        });
-      }
-      updateMarkers(true);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Animate marker position
   const animateMarker = (markerObj: any, from: { lat: number; lng: number }, to: { lat: number; lng: number }, duration = 1000, key: string) => {
     if (!markerObj) return;
     let start: number | null = null;
@@ -106,7 +76,7 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({ markers, height = "400px",
       const progress = Math.min((timestamp - start) / duration, 1);
       const lat = from.lat + (to.lat - from.lat) * progress;
       const lng = from.lng + (to.lng - from.lng) * progress;
-      markerObj.setPosition({ lat, lng });
+      markerObj.position = { lat, lng };
       if (progress < 1) {
         animationFrameRef.current[key] = requestAnimationFrame(animate);
       }
@@ -117,17 +87,16 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({ markers, height = "400px",
     animationFrameRef.current[key] = requestAnimationFrame(animate);
   };
 
-  // Update markers when markers prop changes
   const updateMarkers = (initial = false) => {
     if (!window.google || !window.google.maps || !mapRef.current) return;
-    // Remove old non-bus markers
+
     Object.entries(markerObjs.current).forEach(([key, m]) => {
       if (!markers.find((mk) => (mk.type === 'bus' || mk.type === 'user') && mk.label === key)) {
-        m.setMap(null);
+        m.map = null;
         delete markerObjs.current[key];
       }
     });
-    // Add traffic layer if requested
+
     if (showTrafficLayer && window.google && window.google.maps && mapRef.current) {
       if (!trafficLayerRef.current) {
         trafficLayerRef.current = new window.google.maps.TrafficLayer();
@@ -137,23 +106,20 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({ markers, height = "400px",
       trafficLayerRef.current.setMap(null);
       trafficLayerRef.current = null;
     }
-    // Add/update markers
+
     markers.forEach((marker) => {
       if (marker.type === 'bus') {
         let color = marker.status === 'online' ? '#22c55e' : '#9ca3af';
         const key = marker.label || marker.lat + ',' + marker.lng;
         if (!markerObjs.current[key]) {
-          // Create marker if not exists
-          markerObjs.current[key] = new window.google.maps.Marker({
+          markerObjs.current[key] = new window.google.maps.marker.AdvancedMarkerElement({
             position: { lat: marker.lat, lng: marker.lng },
             map: mapRef.current,
-            label: marker.label,
-            icon: busSvg(color),
+            content: createBusContent(color, marker.label),
           });
         } else {
-          // Animate marker to new position
-          const prevPos = markerObjs.current[key].getPosition();
-          const from = { lat: prevPos.lat(), lng: prevPos.lng() };
+          const prevPos = markerObjs.current[key].position;
+          const from = { lat: prevPos.lat, lng: prevPos.lng };
           const to = { lat: marker.lat, lng: marker.lng };
           if (from.lat !== to.lat || from.lng !== to.lng) {
             animateMarker(markerObjs.current[key], from, to, 1000, key);
@@ -162,33 +128,28 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({ markers, height = "400px",
       } else if (marker.type === 'user') {
         const key = marker.label || 'user-' + marker.lat + ',' + marker.lng;
         if (!markerObjs.current[key]) {
-          markerObjs.current[key] = new window.google.maps.Marker({
+          markerObjs.current[key] = new window.google.maps.marker.AdvancedMarkerElement({
             position: { lat: marker.lat, lng: marker.lng },
             map: mapRef.current,
-            label: marker.label,
-            icon: userSvg(),
+            content: createUserContent(),
           });
         } else {
-          // Update user position
-          markerObjs.current[key].setPosition({ lat: marker.lat, lng: marker.lng });
+          markerObjs.current[key].position = { lat: marker.lat, lng: marker.lng };
         }
       } else if (marker.type === 'stop') {
         let color = marker.status === 'passed' ? '#22c55e' : '#ef4444';
         const key = marker.label || marker.lat + ',' + marker.lng;
         if (!markerObjs.current[key]) {
-          markerObjs.current[key] = new window.google.maps.Marker({
+          markerObjs.current[key] = new window.google.maps.marker.AdvancedMarkerElement({
             position: { lat: marker.lat, lng: marker.lng },
             map: mapRef.current,
-            label: marker.label,
-            icon: stopSvg(color),
+            content: createStopContent(color),
           });
         }
       } else if (marker.type === 'polyline' && marker.path && marker.path.length > 1) {
-        // Remove old polyline if exists
         if (polylineRef.current) {
           polylineRef.current.setMap(null);
         }
-        // Draw new polyline for route
         polylineRef.current = new window.google.maps.Polyline({
           path: marker.path,
           geodesic: true,
@@ -201,13 +162,38 @@ export const GoogleMap: React.FC<GoogleMapProps> = ({ markers, height = "400px",
     });
   };
 
-  // Update markers when markers prop changes
+  React.useEffect(() => {
+    const initMap = () => {
+      if (!window.google?.maps?.marker || !ref.current) return
+      if (!mapRef.current) {
+        mapRef.current = new window.google.maps.Map(ref.current, {
+          center: markers.length > 0 ? { lat: markers[0].lat, lng: markers[0].lng } : { lat: 0, lng: 0 },
+          zoom: 18,
+          mapTypeId: 'roadmap',
+          styles: darkMapStyle,
+          mapId: process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID || "DEMO_MAP_ID",
+        })
+      }
+      updateMarkers(true)
+    }
+
+    if (window.google?.maps?.marker) {
+      initMap()
+    } else {
+      const interval = setInterval(() => {
+        if (window.google?.maps?.marker) {
+          clearInterval(interval)
+          initMap()
+        }
+      }, 200)
+      return () => clearInterval(interval)
+    }
+  }, [])
+
   React.useEffect(() => {
     updateMarkers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [markers]);
 
-  // Pan to center when center prop changes
   React.useEffect(() => {
     if (center && mapRef.current && window.google && window.google.maps) {
       mapRef.current.panTo(new window.google.maps.LatLng(center.lat, center.lng));

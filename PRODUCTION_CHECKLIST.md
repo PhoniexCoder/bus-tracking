@@ -1,50 +1,35 @@
-# 🚀 Production Readiness Checklist
+# Production Readiness Checklist
 
-## 🔴 CRITICAL - Must Fix Before Deployment
+## CRITICAL — Must Fix Before Deployment
 
-### Security Issues
-- [ ] **Remove Firebase Admin SDK key from repository**
+### Git History
+- [ ] **Scrub secrets from git history** (use `git filter-repo`)
+  Files to remove: `bus-tracking-7dcff-firebase-adminsdk-fbsvc-a118dbc578.json`, `backend/.env`
   ```bash
-  git rm --cached bus-tracking-7dcff-firebase-adminsdk-fbsvc-a118dbc578.json
-  git commit -m "Remove sensitive Firebase key"
+  pip install git-filter-repo
+  git filter-repo --path bus-tracking-7dcff-firebase-adminsdk-fbsvc-a118dbc578.json --invert-paths
+  git filter-repo --path backend/.env --invert-paths
   ```
-  - Store securely on server only
-  - Add to `.gitignore` (already updated)
+- [ ] Force-push cleaned history to remote
 
-- [ ] **Remove SSL certificates from repository**
-  ```bash
-  git rm --cached custom_ca_bundle.pem
-  git rm --cached "USERTrust RSA Certification Authority.crt"
-  git rm --cached "ZeroSSL RSA Domain Secure Site CA.crt"
-  git commit -m "Remove SSL certificates"
-  ```
-
-- [ ] **Verify `.env` files are not committed**
-  ```bash
-  git status  # Should not show .env files
-  ```
-
-- [ ] **Generate new JWT secret for production**
-  ```bash
-  # Linux/Mac:
-  openssl rand -hex 32
-  
-  # Windows PowerShell:
-  -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 32 | % {[char]$_})
-  ```
-  Update in `backend/.env`: `JWT_SECRET_KEY=<new-secret>`
-
----
-
-## 🟡 HIGH PRIORITY - Should Fix Before Go-Live
-
-### Configuration
-- [ ] Update `ALLOWED_ORIGINS` in `backend/.env` with production domain
-- [ ] Update `NEXT_PUBLIC_BACKEND_WS_URL` to production WebSocket URL (wss://)
-- [ ] Update `NEXT_PUBLIC_BACKEND_URL` to production API URL (https://)
+### Production Configuration
 - [ ] Set `ENVIRONMENT=production` in `backend/.env`
-- [ ] Enable Firebase App Check for production
+- [ ] Set `PROXY_ALLOWED_DOMAINS` to specific domains in production (not empty)
+- [ ] Set `ALLOWED_ORIGINS` to production frontend URL(s) in `backend/.env`
+- [ ] Generate a strong `SESSION_SECRET` (32+ random chars)
+- [ ] Set `NEXT_PUBLIC_BACKEND_WS_URL` to production WebSocket URL (`wss://`)
+- [ ] Set `NEXT_PUBLIC_BACKEND_URL` to production API URL (`https://`)
 - [ ] Restrict Google Maps API key to production domain
+- [ ] Enable Firebase App Check for production
+
+## HIGH — Should Fix Before Go-Live
+
+### Security
+- [ ] Verify CSP header allows all required resources for production domains
+- [ ] Override `CSP_HEADER` env var if default CSP needs customization
+- [ ] Remove `'unsafe-inline'` and `'unsafe-eval'` from CSP if possible
+- [ ] Remove `http://localhost:*` from `ALLOWED_ORIGINS` in production
+- [ ] Review Firestore security rules for admin-only write access
 
 ### Firestore Security Rules
 - [ ] Add admin-only write restrictions

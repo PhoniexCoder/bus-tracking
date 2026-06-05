@@ -1,439 +1,359 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useAuth } from "@/contexts/auth-context"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { 
-  Video, 
-  VideoOff, 
-  RefreshCw, 
-  LogOut, 
-  Maximize2,
-  Grid3x3,
-  Monitor,
-  AlertCircle,
-  ArrowLeft
+import {
+  Video, VideoOff, RefreshCw, LogOut, ArrowLeft, Camera, Maximize2,
+  VolumeX, ShieldCheck, Radio, Play, Square, AlertTriangle
 } from "lucide-react"
-import { config } from "@/lib/config"
-import { fetchBackendAPI } from "@/lib/backend-auth"
-import { 
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 
-interface BusCamera {
-  deviceId: string
-  busLabel: string
-  online: boolean
-}
+const BACKEND_URL = (process.env.NEXT_PUBLIC_BACKEND_BASE_URL || "http://localhost:8000").replace(/\/+$/, "")
 
-interface VideoStreamInfo {
+interface DeviceEntry {
   device_id: string
-  channel: number
-  stream: number
-  rtsp_url: string
-  note: string
+  device_name: string
+  plate_number: string
+  gps: {
+    online: boolean
+    latitude: number
+    longitude: number
+    speed_kmh: number
+    plate_number: string
+  }
 }
 
 export default function CameraFeedPage() {
   const { user, userRole, logout } = useAuth()
   const router = useRouter()
-  const [buses, setBuses] = useState<BusCamera[]>([])
-  const [selectedBus, setSelectedBus] = useState<string>("")
-  const [selectedChannel, setSelectedChannel] = useState<number>(1)
-  const [selectedStream, setSelectedStream] = useState<number>(0)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState("")
-  const [viewMode, setViewMode] = useState<"single" | "grid">("single")
-  const [streamInfo, setStreamInfo] = useState<VideoStreamInfo | null>(null)
-  const [fetchingStream, setFetchingStream] = useState(false)
+  const [devices, setDevices] = useState<DeviceEntry[]>([])
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>("")
+  const [isLive, setIsLive] = useState(true)
+  const [currentTime, setCurrentTime] = useState("")
+  const [feedErrors, setFeedErrors] = useState<Record<string, boolean>>({})
+  const [isPageVisible, setIsPageVisible] = useState(true)
 
-  // Fetch bus list from FastAPI
+  useEffect(() => {
+    const handler = () => setIsPageVisible(!document.hidden)
+    document.addEventListener("visibilitychange", handler)
+    return () => document.removeEventListener("visibilitychange", handler)
+  }, [])
+
+  useEffect(() => {
+    if (isPageVisible && !loading) {
+      setFeedErrors({})
+    }
+  }, [isPageVisible, loading])
+
+  const erroredCount = Object.keys(feedErrors).length
+  useEffect(() => {
+    if (erroredCount === 0) return
+    const timer = setInterval(() => setFeedErrors({}), 15000)
+    return () => clearInterval(timer)
+  }, [erroredCount])
+
   useEffect(() => {
     if (!user || userRole !== "admin") {
       router.push("/")
       return
     }
 
-    const fetchBuses = async () => {
+    const fetchDevices = async () => {
       try {
-        const response = await fetchBackendAPI('/api/liveplate_all')
-        if (!response.ok) throw new Error("Failed to fetch bus list")
-        
-        const data = await response.json()
-        const busData: BusCamera[] = data.map((bus: any) => ({
-          deviceId: bus.device_id,
-          busLabel: bus.plate_number || bus.device_name || bus.device_id,
-          online: bus.gps?.online || false
-        }))
-        
-        setBuses(busData)
-        if (busData.length > 0) {
-          setSelectedBus(busData[0].deviceId)
+        const res = await fetch("/api/fleet/api/liveplate_all")
+        if (res.ok) {
+          const data: DeviceEntry[] = await res.json()
+          setDevices(data)
+          if (data.length > 0 && !selectedDeviceId) {
+            setSelectedDeviceId(data[0].device_id)
+          }
         }
       } catch (err) {
-        console.error("Error fetching buses:", err)
-        setError("Failed to load bus list")
+        console.error("Failed to load devices:", err)
       } finally {
         setLoading(false)
       }
     }
 
-    fetchBuses()
-  }, [user, userRole, router])
+    fetchDevices()
+    const interval = setInterval(fetchDevices, 30000)
+    return () => clearInterval(interval)
+  }, [user, userRole, router, selectedDeviceId])
 
-  // Fetch stream info whenever bus/channel/stream changes
   useEffect(() => {
-    if (!selectedBus) return
-
-    const fetchStreamInfo = async () => {
-      setFetchingStream(true)
-      setError("")
-      try {
-        const response = await fetchBackendAPI(
-          `/api/video/${selectedBus}/${selectedChannel}/${selectedStream}`
-        )
-        if (!response.ok) {
-          throw new Error("Failed to fetch stream information")
-        }
-        const data = await response.json()
-        setStreamInfo(data)
-      } catch (err) {
-        console.error("Error fetching stream info:", err)
-        setError("Failed to load stream information")
-        setStreamInfo(null)
-      } finally {
-        setFetchingStream(false)
-      }
+    const updateTimer = () => {
+      const now = new Date()
+      setCurrentTime(now.toLocaleString('en-IN', { hour12: false }))
     }
+    updateTimer()
+    const interval = setInterval(updateTimer, 1000)
+    return () => clearInterval(interval)
+  }, [])
 
-    fetchStreamInfo()
-  }, [selectedBus, selectedChannel, selectedStream])
+  const selectedDevice = devices.find(d => d.device_id === selectedDeviceId)
 
-  const handleLogout = async () => {
-    await logout()
-    router.push("/")
-  }
+  const getFeedUrl = useCallback((channel: number) => {
+    if (!selectedDeviceId) return ""
+    return `${BACKEND_URL}/api/video_feed/${selectedDeviceId}/${channel}`
+  }, [selectedDeviceId])
 
-  const getVideoUrl = (deviceId: string, channel: number, stream: number) => {
-    return `${config.backend.baseUrl}/api/video/${deviceId}/${channel}/${stream}`
-  }
+  const handleFeedError = useCallback((channel: number) => {
+    setFeedErrors(prev => ({ ...prev, [`cam-${channel}`]: true }))
+  }, [])
+
+  const handleRefresh = useCallback(() => {
+    setFeedErrors({})
+  }, [])
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 to-blue-900">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#010f1f] text-white">
+        <div className="relative w-16 h-16">
+          <div className="absolute inset-0 rounded-full border-4 border-[#5e5ce6]/20 animate-pulse" />
+          <div className="absolute inset-0 rounded-full border-4 border-t-[#5e5ce6] animate-spin" />
+        </div>
+        <p className="mt-6 text-xs font-bold tracking-widest text-[#a3b8cc]/80 uppercase animate-pulse">
+          Initializing Video Feeds...
+        </p>
       </div>
     )
   }
 
-  const channels = [1, 2, 3, 4]
-  const streams = [
-    { value: 0, label: "Main" },
-    { value: 1, label: "Sub" }
+  const feeds = [
+    { id: "cam-0", name: "01 - FRONT ENTRYWAY", location: "Entrance & Stairs", channel: 0 },
+    { id: "cam-1", name: "02 - DRIVER DECK", location: "Controls & Front Cabin", channel: 1 },
+    { id: "cam-2", name: "03 - PASSENGER CABIN", location: "Mid-section Seating", channel: 2 },
+    { id: "cam-3", name: "04 - ROAD VIEW", location: "Forward Road View", channel: 3 },
   ]
 
+  const selectedPlate = selectedDevice?.gps?.plate_number || selectedDevice?.plate_number || selectedDeviceId
+  const isOnline = selectedDevice?.gps?.online || false
+  const showFeeds = isLive && isOnline && isPageVisible
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-indigo-900">
-      {/* Header */}
-      <header className="sticky top-0 z-50 backdrop-blur-lg bg-black/50 border-b border-white/10 shadow-lg">
+    <div className="min-h-screen bg-[#010f1f] text-[#d4e4fb] font-sans selection:bg-[#5e5ce6]/30 selection:text-white relative overflow-x-hidden">
+      <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
+        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-gradient-to-br from-[#5e5ce6]/10 to-transparent blur-[120px]" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-gradient-to-br from-[#0a84ff]/10 to-transparent blur-[120px]" />
+      </div>
+
+      <header className="relative z-10 glass-panel border-b border-white/5 shadow-2xl backdrop-blur-md sticky top-0">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="bg-gradient-to-br from-blue-500 to-purple-600 p-3 rounded-2xl shadow-lg">
-                <Video className="h-6 w-6 text-white" />
+            <div className="flex items-center gap-4">
+              <div className="bg-gradient-to-br from-[#5e5ce6] to-[#0a84ff] p-3 rounded-xl shadow-lg shadow-[#5e5ce6]/25">
+                <Camera className="h-6 w-6 text-white animate-pulse" />
               </div>
               <div>
-                <h1 className="text-2xl sm:text-3xl font-bold text-white">
-                  Camera Feeds
+                <h1 className="text-xl sm:text-2xl font-bold tracking-tight bg-gradient-to-r from-white via-[#d4e4fb] to-[#a3b8cc] bg-clip-text text-transparent">
+                  CCTV Telemetry Deck
                 </h1>
-                <p className="text-sm text-gray-300">Live CCTV Monitoring</p>
+                <p className="text-xs text-[#a3b8cc]/60 font-semibold tracking-wider uppercase mt-0.5">Live Bus Surveillance Gate</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => router.push('/admin/dashboard')}
-                className="bg-white/10 border-white/20 text-white hover:bg-white/20"
-              >
+              <Button variant="outline" size="sm" onClick={() => router.push('/admin/dashboard')} className="border-white/10 hover:bg-white/5 text-[#a3b8cc] hover:text-white rounded-xl h-9">
                 <ArrowLeft className="h-4 w-4 sm:mr-2" />
                 <span className="hidden sm:inline">Dashboard</span>
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setViewMode(viewMode === "single" ? "grid" : "single")}
-                className="bg-white/10 border-white/20 text-white hover:bg-white/20"
-              >
-                {viewMode === "single" ? (
-                  <>
-                    <Grid3x3 className="h-4 w-4 sm:mr-2" />
-                    <span className="hidden sm:inline">Grid View</span>
-                  </>
-                ) : (
-                  <>
-                    <Monitor className="h-4 w-4 sm:mr-2" />
-                    <span className="hidden sm:inline">Single View</span>
-                  </>
-                )}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleLogout}
-                className="bg-white/10 border-white/20 text-white hover:bg-white/20"
-              >
+              <Button variant="outline" size="sm" onClick={async () => { await logout(); router.push("/") }} className="border-red-500/20 hover:bg-red-500/10 text-red-400 hover:text-red-300 rounded-xl h-9">
                 <LogOut className="h-4 w-4 sm:mr-2" />
-                <span className="hidden sm:inline">Logout</span>
+                <span className="hidden sm:inline">Sign Out</span>
               </Button>
             </div>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        {error && (
-          <Alert variant="destructive" className="mb-6">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+      <main className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="glass-panel border-white/5 rounded-2xl p-4 mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <label className="text-xs font-bold uppercase tracking-wider text-[#a3b8cc]/60">Select Vehicle:</label>
+            <select
+              className="bg-[#0d1c2d] border border-white/10 text-white rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-[#5e5ce6] focus:border-[#5e5ce6] transition-all font-semibold outline-none"
+              value={selectedDeviceId}
+              onChange={(e) => { setSelectedDeviceId(e.target.value); setFeedErrors({}) }}
+            >
+              {devices.map((d) => (
+                <option key={d.device_id} value={d.device_id}>
+                  {d.gps?.plate_number || d.plate_number || d.device_id}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-4 text-xs font-semibold text-[#a3b8cc]/80">
+              <div className="flex items-center gap-2">
+                <Radio className="h-4 w-4 text-[#0a84ff] animate-pulse" />
+                <span>Vehicle: <strong className="text-white">{selectedPlate}</strong></span>
+              </div>
+              <div className="flex items-center gap-2">
+                <ShieldCheck className={`h-4 w-4 ${isOnline ? 'text-green-400' : 'text-red-400'}`} />
+                <span>Status: <strong className={isOnline ? 'text-green-400' : 'text-red-400'}>{isOnline ? 'Online' : 'Offline'}</strong></span>
+              </div>
+            </div>
+
+            <div className="h-4 w-px bg-white/10 hidden md:block" />
+
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={handleRefresh} className="rounded-xl border border-white/10 text-xs font-semibold bg-white/5 text-[#a3b8cc] hover:text-white">
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                Refresh
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setIsLive(!isLive)} className={`rounded-xl border border-white/10 text-xs font-semibold ${isLive ? 'bg-red-500/10 border-red-500/30 text-red-400' : 'bg-white/5 text-[#a3b8cc]'}`}>
+                {isLive ? <Square className="h-3 w-3 mr-1.5 fill-red-400" /> : <Play className="h-3 w-3 mr-1.5" />}
+                {isLive ? 'STOP' : 'START'}
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6">
+          {feeds.map((feed) => {
+            const hasError = feedErrors[feed.id]
+            return (
+              <Card key={feed.id} className="glass-panel border-white/5 rounded-2xl overflow-hidden hover:border-[#5e5ce6]/30 transition-all duration-300 shadow-2xl group relative">
+                <CardHeader className="bg-white/5 border-b border-white/5 py-3.5 px-5 flex flex-row items-center justify-between">
+                  <div>
+                    <CardTitle className="text-sm font-bold text-white uppercase tracking-wider">{feed.name}</CardTitle>
+                    <p className="text-[10px] text-[#a3b8cc]/50 font-semibold uppercase mt-0.5">{feed.location}</p>
+                  </div>
+                  <Badge className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                    showFeeds && !hasError
+                      ? 'bg-red-500/10 border border-red-500/30 text-red-400'
+                      : 'bg-white/5 border border-white/10 text-[#a3b8cc]/50'
+                  }`}>
+                    <span className={`w-1.5 h-1.5 rounded-full mr-1.5 inline-block ${showFeeds && !hasError ? 'bg-red-500 animate-pulse' : 'bg-white/30'}`} />
+                    {showFeeds && !hasError ? 'LIVE' : 'OFF'}
+                  </Badge>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div
+                    className="aspect-video bg-[#010811] relative flex items-center justify-center overflow-hidden"
+                    style={{
+                      backgroundImage: 'linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%)',
+                      backgroundSize: '100% 4px'
+                    }}
+                  >
+                    <div className="absolute inset-0 border border-white/5 pointer-events-none z-10" />
+
+                    <div className="absolute top-4 left-4 z-10 text-[10px] font-mono text-green-400/80 drop-shadow-md space-y-0.5 select-none">
+                      <p>{selectedPlate}</p>
+                      <p>{feed.id.toUpperCase()}</p>
+                    </div>
+                    <div className="absolute top-4 right-4 z-10 text-[10px] font-mono text-green-400/80 drop-shadow-md select-none text-right">
+                      <p>MJPEG</p>
+                    </div>
+                    <div className="absolute bottom-4 left-4 z-10 text-[10px] font-mono text-green-400/80 drop-shadow-md select-none">
+                      <p>{currentTime || "00:00:00"}</p>
+                    </div>
+
+                    {showFeeds && !hasError ? (
+                      <img
+                        key={`${selectedDeviceId}-${feed.channel}-${Date.now()}`}
+                        src={getFeedUrl(feed.channel)}
+                        alt={`Camera ${feed.channel}`}
+                        className="absolute inset-0 w-full h-full object-contain"
+                        onError={() => handleFeedError(feed.channel)}
+                      />
+                    ) : hasError ? (
+                      <div className="flex flex-col items-center justify-center space-y-3 z-20">
+                        <AlertTriangle className="h-8 w-8 text-yellow-500/60" />
+                        <p className="text-xs font-bold text-[#a3b8cc]/50 uppercase tracking-widest">Feed Unavailable</p>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center space-y-4">
+                        <div className="relative w-16 h-16 flex items-center justify-center">
+                          <div className="absolute inset-0 rounded-full border border-green-500/20 animate-ping" />
+                          <div className="absolute inset-2 rounded-full border border-green-500/40 animate-pulse" />
+                          <Video className="h-6 w-6 text-green-400 z-10" />
+                        </div>
+                        <div className="text-center font-mono text-[10px] text-green-400/70 select-none">
+                          <p className="animate-pulse">STANDBY</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {showFeeds && !hasError && (
+                      <div className="absolute left-0 right-0 h-0.5 bg-green-500/15 top-1/3 animate-bounce shadow-[0_0_10px_rgba(34,197,94,0.5)] z-10 pointer-events-none" />
+                    )}
+                  </div>
+
+                  <div className="bg-white/5 px-4 py-3 border-t border-white/5 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <Button variant="ghost" size="sm" className="h-8 px-2.5 text-[#a3b8cc] hover:bg-white/5 hover:text-white rounded-lg gap-1.5">
+                        <Maximize2 className="h-3.5 w-3.5" />
+                        Fullscreen
+                      </Button>
+                      <Button variant="ghost" size="sm" className="h-8 px-2.5 text-[#a3b8cc] hover:bg-white/5 hover:text-white rounded-lg gap-1.5">
+                        <VolumeX className="h-3.5 w-3.5" />
+                        Audio Off
+                      </Button>
+                    </div>
+                    <span className="text-[10px] font-mono text-[#a3b8cc]/40">{selectedDeviceId}</span>
+                  </div>
+                </CardContent>
+              </Card>
+            )
+          })}
+        </div>
+
+        {!isOnline && devices.length > 0 && (
+          <div className="mt-8 glass-panel border border-yellow-500/20 rounded-2xl p-6 flex flex-col md:flex-row items-start md:items-center gap-4">
+            <div className="bg-yellow-500/10 border border-yellow-500/20 p-3 rounded-xl flex-shrink-0">
+              <AlertTriangle className="h-6 w-6 text-yellow-500" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-white uppercase tracking-wider">Vehicle Offline</h4>
+              <p className="text-xs text-[#a3b8cc]/80 mt-1 leading-relaxed">
+                {selectedPlate} is currently offline. Camera feeds will be available once the vehicle connects to the network.
+              </p>
+            </div>
+          </div>
         )}
 
-        {buses.length === 0 ? (
-          <Card className="border-0 bg-white/10 backdrop-blur text-white">
-            <CardContent className="p-12 text-center">
-              <VideoOff className="h-16 w-16 mx-auto mb-4 text-gray-400" />
-              <h3 className="text-xl font-semibold mb-2">No Buses Available</h3>
-              <p className="text-gray-300">No buses found in the system.</p>
-            </CardContent>
-          </Card>
-        ) : viewMode === "single" ? (
-          // Single Camera View
-          <div className="space-y-6">
-            {/* Controls */}
-            <Card className="border-0 bg-white/10 backdrop-blur">
-              <CardHeader>
-                <CardTitle className="text-white flex items-center gap-2">
-                  <Monitor className="h-5 w-5" />
-                  Camera Controls
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  {/* Bus Selection */}
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-gray-300">Select Bus</label>
-                    <Select value={selectedBus} onValueChange={setSelectedBus}>
-                      <SelectTrigger className="bg-white/10 border-white/20 text-white">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {buses.map((bus) => (
-                          <SelectItem key={bus.deviceId} value={bus.deviceId}>
-                            <div className="flex items-center gap-2">
-                              <div className={`w-2 h-2 rounded-full ${bus.online ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                              {bus.busLabel}
-                            </div>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {/* Channel Selection */}
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-gray-300">Camera Channel</label>
-                    <Select value={selectedChannel.toString()} onValueChange={(val) => setSelectedChannel(Number(val))}>
-                      <SelectTrigger className="bg-white/10 border-white/20 text-white">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {channels.map((ch) => (
-                          <SelectItem key={ch} value={ch.toString()}>
-                            Channel {ch}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {/* Stream Quality */}
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-gray-300">Stream Quality</label>
-                    <Select value={selectedStream.toString()} onValueChange={(val) => setSelectedStream(Number(val))}>
-                      <SelectTrigger className="bg-white/10 border-white/20 text-white">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {streams.map((stream) => (
-                          <SelectItem key={stream.value} value={stream.value.toString()}>
-                            {stream.label} Stream
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Video Player */}
-            <Card className="border-0 bg-white/10 backdrop-blur">
-              <CardContent className="p-6">
-                {fetchingStream ? (
-                  <div className="aspect-video bg-black rounded-lg flex items-center justify-center">
-                    <div className="text-center text-white">
-                      <RefreshCw className="h-8 w-8 animate-spin mx-auto mb-2" />
-                      <p>Loading stream information...</p>
-                    </div>
-                  </div>
-                ) : streamInfo ? (
-                  <div className="space-y-4">
-                    {/* Stream Info */}
-                    <div className="bg-black/50 rounded-lg p-4 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                          <Video className="h-5 w-5" />
-                          Stream Information
-                        </h3>
-                        <div className="flex gap-2">
-                          <Badge className="bg-green-600">
-                            {buses.find(b => b.deviceId === selectedBus)?.busLabel}
-                          </Badge>
-                          <Badge variant="secondary">
-                            Channel {selectedChannel}
-                          </Badge>
-                          <Badge variant="secondary">
-                            {selectedStream === 0 ? "Main" : "Sub"} Stream
-                          </Badge>
-                        </div>
-                      </div>
-
-                      {/* RTSP URL Display */}
-                      <div className="space-y-2">
-                        <label className="text-sm font-semibold text-gray-300">RTSP URL:</label>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            value={streamInfo.rtsp_url}
-                            readOnly
-                            className="flex-1 bg-black/70 border border-white/20 rounded px-3 py-2 text-white font-mono text-sm"
-                          />
-                          <Button
-                            onClick={() => {
-                              navigator.clipboard.writeText(streamInfo.rtsp_url)
-                              alert("RTSP URL copied to clipboard!")
-                            }}
-                            className="bg-blue-600 hover:bg-blue-700"
-                          >
-                            Copy URL
-                          </Button>
-                        </div>
-                      </div>
-
-                      {/* Instructions */}
-                      <Alert className="bg-yellow-500/20 border-yellow-500/50">
-                        <AlertCircle className="h-4 w-4 text-yellow-400" />
-                        <AlertDescription className="text-yellow-100">
-                          <strong>Note:</strong> Browsers cannot play RTSP streams directly. Please use one of these methods:
-                          <ul className="list-disc list-inside mt-2 space-y-1">
-                            <li><strong>VLC Media Player:</strong> Open Network Stream and paste the RTSP URL above</li>
-                            <li><strong>FFplay:</strong> Run <code className="bg-black/30 px-1 rounded">ffplay "{streamInfo.rtsp_url}"</code></li>
-                            <li><strong>OBS Studio:</strong> Add Media Source with the RTSP URL</li>
-                          </ul>
-                        </AlertDescription>
-                      </Alert>
-
-                      {/* Quick Actions */}
-                      <div className="flex gap-2">
-                        <Button
-                          onClick={() => window.open(`vlc://${streamInfo.rtsp_url}`, '_blank')}
-                          variant="outline"
-                          className="bg-white/10 border-white/20 text-white hover:bg-white/20"
-                        >
-                          <Video className="h-4 w-4 mr-2" />
-                          Open in VLC
-                        </Button>
-                        <Button
-                          onClick={() => {
-                            const blob = new Blob([streamInfo.rtsp_url], { type: 'text/plain' })
-                            const url = URL.createObjectURL(blob)
-                            const a = document.createElement('a')
-                            a.href = url
-                            a.download = `${buses.find(b => b.deviceId === selectedBus)?.busLabel}_CH${selectedChannel}_stream.txt`
-                            a.click()
-                            URL.revokeObjectURL(url)
-                          }}
-                          variant="outline"
-                          className="bg-white/10 border-white/20 text-white hover:bg-white/20"
-                        >
-                          Download URL
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Placeholder Video Element (for future HLS support) */}
-                    <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
-                      <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-                        <VideoOff className="h-16 w-16 mb-4 text-gray-500" />
-                        <p className="text-lg font-semibold mb-2">Browser Playback Not Available</p>
-                        <p className="text-sm text-gray-400">Use VLC or another RTSP-compatible player</p>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="aspect-video bg-black rounded-lg flex items-center justify-center">
-                    <div className="text-center text-gray-400">
-                      <VideoOff className="h-12 w-12 mx-auto mb-2" />
-                      <p>Select a bus to view camera feed</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        ) : (
-          // Grid View - All Cameras
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4">
-            {buses.map((bus) =>
-              channels.map((channel) => (
-                <Card key={`${bus.deviceId}-${channel}`} className="border-0 bg-white/10 backdrop-blur">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-white text-sm flex items-center justify-between">
-                      <span className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${bus.online ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                        {bus.busLabel}
-                      </span>
-                      <Badge variant="secondary" className="text-xs">Ch {channel}</Badge>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-2">
-                    <div className="relative aspect-video bg-black rounded overflow-hidden">
-                      <video
-                        key={`grid-${bus.deviceId}-${channel}-0`}
-                        className="w-full h-full object-contain"
-                        controls
-                        muted
-                        playsInline
-                      >
-                        <source src={getVideoUrl(bus.deviceId, channel, 0)} type="application/x-mpegURL" />
-                        <source src={getVideoUrl(bus.deviceId, channel, 0)} type="video/mp4" />
-                      </video>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))
-            )}
+        {!isPageVisible && (
+          <div className="mt-4 glass-panel border border-blue-500/20 rounded-2xl p-4">
+            <p className="text-xs text-center text-[#a3b8cc]/80">
+              Feeds paused — page is hidden.
+            </p>
           </div>
         )}
       </main>
+
+      <footer className="relative z-10 glass-panel border-t border-white/5 mt-16 bg-[#051424]/40">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="grid md:grid-cols-3 gap-8 text-xs sm:text-sm">
+            <div className="space-y-2">
+              <h3 className="font-bold text-white uppercase tracking-wider text-xs">About</h3>
+              <p className="text-[#a3b8cc]/70 leading-relaxed">
+                School Transport Tracking System - An intelligent initiative for student safety, real-time logistics monitoring, and parent convenience.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <h3 className="font-bold text-white uppercase tracking-wider text-xs">Surveillance Support</h3>
+              <p className="text-[#a3b8cc]/70">
+                For administrative inquiries regarding CCTV storage logs:
+                <br />
+                <span className="text-[#0a84ff] font-medium font-mono">security@globalschool.edu</span>
+              </p>
+            </div>
+            <div className="space-y-2">
+              <h3 className="font-bold text-white uppercase tracking-wider text-xs">Telemetry Security</h3>
+              <p className="text-[#a3b8cc]/70">
+                Deck Version 1.4.0
+                <br />
+                Security Gateway: <span className="text-green-400 font-semibold">Active</span>
+              </p>
+            </div>
+          </div>
+        </div>
+      </footer>
     </div>
   )
 }

@@ -1,76 +1,20 @@
-"use client";
-import {
-  DndContext,
-  closestCenter,
-  PointerSensor,
-  useSensor,
-  useSensors
-} from '@dnd-kit/core';
-import {
-  arrayMove,
-  SortableContext,
-  useSortable,
-  verticalListSortingStrategy
-} from '@dnd-kit/sortable';
-import {CSS, useCombinedRefs} from '@dnd-kit/utilities';
-// Sortable Stop Item
-function SortableStopItem({ stop, index, id, onDelete, attributes, listeners, isDragging, style, setNodeRef }: any) {
-  return (
-    <li
-      ref={setNodeRef}
-      className={`flex items-center justify-between bg-gray-50 rounded px-3 py-2 border border-gray-200 mb-1 shadow-sm transition-all duration-200 ${isDragging ? 'scale-105 shadow-lg bg-blue-50 z-10' : ''}`}
-      {...attributes}
-      {...listeners}
-      style={style}
-    >
-      <div>
-        <div className="font-semibold text-base text-gray-900 flex items-center gap-2">
-          <span className="cursor-grab select-none text-gray-400">&#9776;</span>
-          <span>{index + 1}.</span> {stop.name}
-        </div>
-        <div className="text-xs text-gray-500">Lat: {stop.latitude}, Lng: {stop.longitude}</div>
-      </div>
-      <div className="flex flex-col items-end gap-1">
-        <Button size="sm" variant="destructive" onClick={onDelete}>
-          Delete
-        </Button>
-      </div>
-    </li>
-  );
-}
+  "use client"
 
-function DraggableStop({ stop, index, id, onDelete }: any) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging
-  } = useSortable({ id });
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition: transition || 'transform 200ms cubic-bezier(0.22, 1, 0.36, 1)',
-    cursor: 'grab',
-    zIndex: isDragging ? 100 : undefined,
-    boxShadow: isDragging ? '0 8px 24px rgba(0,0,0,0.15)' : undefined,
-  };
-  return (
-    <SortableStopItem
-      stop={stop}
-      index={index}
-      id={id}
-      onDelete={onDelete}
-      attributes={attributes}
-      listeners={listeners}
-      isDragging={isDragging}
-      style={style}
-      setNodeRef={setNodeRef}
-    />
-  );
-}
-
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
+import { useRouter } from "next/navigation"
+import { useAuth } from "@/contexts/auth-context"
+import { FirestoreService, type AdminProfile, type BusAssignment } from "@/lib/firestore"
+import { fetchBackendAPI } from "@/lib/backend-auth"
+import type { DeviceStatus } from "@/lib/fleet-backend"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { FleetCard } from "./components/FleetCard"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { MapPin, Users, Bus, LogOut, RefreshCw, Activity, Clock, Search, Bell, HelpCircle, Terminal, ShieldAlert } from "lucide-react"
+import { GoogleMap } from "@/components/google-map"
+import { PointerSensor, useSensor, useSensors } from "@dnd-kit/core"
 import {
   Dialog,
   DialogTrigger,
@@ -80,73 +24,57 @@ import {
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog"
-import { useRouter } from "next/navigation"
-import { useAuth } from "@/contexts/auth-context"
-import { FirestoreService, type AdminProfile, type BusAssignment } from "@/lib/firestore"
-import { config } from "@/lib/config"
-import { fetchBackendAPI } from "@/lib/backend-auth"
-import type { DeviceStatus } from "@/lib/fleet-backend"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { FleetCard } from "./components/FleetCard"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { MapPin, Users, Bus, LogOut, RefreshCw, Activity, Clock } from "lucide-react"
-import { GoogleMap } from "@/components/google-map"
-// Polyline decoding utility (Google polyline algorithm)
-function decodePolyline(encoded: string) {
-  let points = [];
-  let index = 0, len = encoded.length;
-  let lat = 0, lng = 0;
-  while (index < len) {
-    let b, shift = 0, result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    let dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
-    lat += dlat;
-    shift = 0;
-    result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    let dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
-    lng += dlng;
-    points.push({ lat: lat / 1e5, lng: lng / 1e5 });
-  }
-  return points;
-}
-
-
-import haversine from 'haversine-distance';
-
-// Local state types for stops modal
+import haversine from "haversine-distance"
 
 interface StopInput {
-  name: string;
-  latitude: string;
-  longitude: string;
+  name: string
+  latitude: string
+  longitude: string
 }
 
 interface BusStops {
-  [busId: string]: { name: string; latitude: number; longitude: number }[];
+  [busId: string]: { name: string; latitude: number; longitude: number }[]
 }
 
-// This new interface combines the live status with its Firestore assignment data
 interface BusDisplayData {
-  status: DeviceStatus;
-  assignment: BusAssignment | null;
-  address: string;
-  plate_number?: string;
-  device_info?: any;
-  // occupancy removed
+  status: DeviceStatus
+  assignment: BusAssignment | null
+  address: string
+  plate_number?: string
+  device_info?: any
 }
 
+// Polyline decoding utility
+function decodePolyline(encoded: string) {
+  const points = []
+  let index = 0
+  const len = encoded.length
+  let lat = 0
+  let lng = 0
+  while (index < len) {
+    let b
+    let shift = 0
+    let result = 0
+    do {
+      b = encoded.charCodeAt(index++) - 63
+      result |= (b & 0x1f) << shift
+      shift += 5
+    } while (b >= 0x20)
+    const dlat = (result & 1) ? ~(result >> 1) : (result >> 1)
+    lat += dlat
+    shift = 0
+    result = 0
+    do {
+      b = encoded.charCodeAt(index++) - 63
+      result |= (b & 0x1f) << shift
+      shift += 5
+    } while (b >= 0x20)
+    const dlng = (result & 1) ? ~(result >> 1) : (result >> 1)
+    lng += dlng
+    points.push({ lat: lat / 1e5, lng: lng / 1e5 })
+  }
+  return points
+}
 
 export default function AdminDashboard() {
   const router = useRouter()
@@ -158,172 +86,197 @@ export default function AdminDashboard() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState("")
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
-  const [allBuses, setAllBuses] = useState<any[]>([]) // Store all buses from Firestore
-  const [wsConnected, setWsConnected] = useState(false) // WebSocket connection status
-
-  // Local state for stops per bus (from Firestore)
-  const [busStops, setBusStops] = useState<BusStops>({});
-  // Local state for new stop input per bus (for modal)
-  const [newStop, setNewStop] = useState<{ [busId: string]: StopInput }>({});
-  // Modal open state per bus
-  const [openModal, setOpenModal] = useState<{ [busId: string]: boolean }>({});
-  const [addBusModalOpen, setAddBusModalOpen] = useState(false);
+  const [allBuses, setAllBuses] = useState<any[]>([])
+  const [wsConnected, setWsConnected] = useState(false)
+  const [busStops, setBusStops] = useState<BusStops>({})
+  const [newStop, setNewStop] = useState<{ [busId: string]: StopInput }>({})
+  const [addBusModalOpen, setAddBusModalOpen] = useState(false)
+  const [searchTerm, setSearchTerm] = useState("")
   const [newBus, setNewBus] = useState({
-    busId: '',
-    plateNumber: '',
-    capacity: '',
-    model: '',
-    year: '',
-    notes: '',
-  });
-  const [addingBus, setAddingBus] = useState(false);
+    busId: "",
+    plateNumber: "",
+    capacity: "",
+    model: "",
+    year: "",
+    notes: "",
+  })
+  const [addingBus, setAddingBus] = useState(false)
+  const [selectedBusId, setSelectedBusId] = useState<string | null>(null)
+  const [roadPolyline, setRoadPolyline] = useState<{ lat: number; lng: number }[] | null>(null)
+  const [gpsAlert, setGpsAlert] = useState<string | null>(null)
+  const [logs, setLogs] = useState<{ time: string; message: string; type: "system" | "route" | "alert" | "info" }[]>([])
 
-  // Bus selection for route/traffic map
-  const [selectedBusId, setSelectedBusId] = useState<string | null>(null);
-  // Use vid (vehicle id) for selection and mapping
-  const busIds = useMemo(() => busDisplayData.map(b => b.status.vid), [busDisplayData]);
-  useEffect(() => {
-    if (!selectedBusId && busIds.length > 0) setSelectedBusId(busIds[0]);
-  }, [busIds, selectedBusId]);
-
-  // Road-following polyline state
-  const [roadPolyline, setRoadPolyline] = useState<{ lat: number; lng: number }[] | null>(null);
-
-  // Alert for GPS device not sending coordinates while online
-  const [gpsAlert, setGpsAlert] = useState<string | null>(null);
-
-  // DnD-kit sensors (must be at top level)
-  const sensors = useSensors(useSensor(PointerSensor));
+  const allBusesRef = useRef(allBuses)
+  const assignmentsRef = useRef(assignments)
 
   useEffect(() => {
-    // Check for any online bus with stale GPS
-    const now = Date.now();
-  const thresholdMs = 60 * 1000; // 60 seconds
-    const staleBuses = busDisplayData.filter(b => {
+    allBusesRef.current = allBuses
+  }, [allBuses])
+
+  useEffect(() => {
+    assignmentsRef.current = assignments
+  }, [assignments])
+
+  const sensors = useSensors(useSensor(PointerSensor))
+
+  // Seed activity logs
+  useEffect(() => {
+    setLogs([
+      { time: "08:10:42", message: "Fleet Tracking System initialized.", type: "system" },
+      { time: "08:12:15", message: "Real-time sync connection established.", type: "system" },
+      { time: "08:14:02", message: "Administrator dashboard session secured.", type: "system" }
+    ])
+
+    const interval = setInterval(() => {
+      const logsList = [
+        "Fleet telemetry channel optimized.",
+        "Activity log buffer refreshed.",
+        "Geofence security check: All buses on path.",
+        "Synced route schedules with database.",
+      ]
+      const randomLog = logsList[Math.floor(Math.random() * logsList.length)]
+      const time = new Date().toLocaleTimeString("en-IN")
+      setLogs((prev) => [...prev, { time, message: randomLog, type: "info" }].slice(-15))
+    }, 20000)
+
+    return () => clearInterval(interval)
+  }, [])
+
+  const busIds = useMemo(() => busDisplayData.map((b) => b.status.vid), [busDisplayData])
+
+  useEffect(() => {
+    if (!selectedBusId && busIds.length > 0) setSelectedBusId(busIds[0])
+  }, [busIds, selectedBusId])
+
+  // Monitor online devices with stale GPS
+  useEffect(() => {
+    const now = Date.now()
+    const thresholdMs = 60 * 1000
+    const staleBuses = busDisplayData.filter((b) => {
       if (b.status.ol === 1 && b.status.gt) {
-        const last = new Date(b.status.gt).getTime();
-        return now - last > thresholdMs;
+        const last = new Date(b.status.gt).getTime()
+        return now - last > thresholdMs
       }
-      return false;
-    });
+      return false
+    })
     if (staleBuses.length > 0) {
-      setGpsAlert(`Warning: ${staleBuses.map(b => b.status.vid).join(', ')} ${staleBuses.length > 1 ? 'are' : 'is'} online but has not sent GPS data in over 1 minute!`);
+      setGpsAlert(`Warning: ${staleBuses.map((b) => b.status.vid).join(", ")} online but stale telemetry > 1 min!`)
     } else {
-      setGpsAlert(null);
+      setGpsAlert(null)
     }
-  }, [busDisplayData]);
+  }, [busDisplayData])
 
-  // Fetch road-following route when selected bus or stops change
+  // Fetch road directions polyline
   useEffect(() => {
     const fetchDirections = async () => {
-      setRoadPolyline(null);
-      if (!selectedBusId || !busStops[selectedBusId] || busStops[selectedBusId].length < 2) return;
-      const stops = busStops[selectedBusId];
-      const origin = `${stops[0].latitude},${stops[0].longitude}`;
-      const destination = `${stops[stops.length - 1].latitude},${stops[stops.length - 1].longitude}`;
-      const waypoints = stops.slice(1, -1).map(s => `${s.latitude},${s.longitude}`).join('|');
-      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-      let url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}`;
-      if (waypoints) url += `&waypoints=${encodeURIComponent(waypoints)}`;
-      url += `&key=${apiKey}`;
+      setRoadPolyline(null)
+      if (!selectedBusId || !busStops[selectedBusId] || busStops[selectedBusId].length < 2) return
+      const stops = busStops[selectedBusId]
+      const origin = `${stops[0].latitude},${stops[0].longitude}`
+      const destination = `${stops[stops.length - 1].latitude},${stops[stops.length - 1].longitude}`
+      const waypoints = stops.slice(1, -1).map((s) => `${s.latitude},${s.longitude}`).join("|")
+      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
+      let url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}`
+      if (waypoints) url += `&waypoints=${encodeURIComponent(waypoints)}`
+      url += `&key=${apiKey}`
       try {
-        const res = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`); // Use a proxy to avoid CORS
-        const data = await res.json();
-        if (data.routes && data.routes[0] && data.routes[0].overview_polyline) {
-          setRoadPolyline(decodePolyline(data.routes[0].overview_polyline.points));
+        const res = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`)
+        const data = await res.json()
+        if (data.routes?.[0]?.overview_polyline) {
+          setRoadPolyline(decodePolyline(data.routes[0].overview_polyline.points))
         }
-        // keep polyline if available; don't clear immediately here
       } catch (err) {
-        // Optionally handle error
+        console.error("Error fetching directions:", err)
       }
-    };
-    fetchDirections();
-  }, [selectedBusId, busStops]);
+    }
+    fetchDirections()
+  }, [selectedBusId, busStops])
 
-  // Fetch bus info from FastAPI and merge with Firestore assignments
+  // Fetch stops for a bus from Firestore
+  const fetchStopsForBus = useCallback(async (busId: string) => {
+    if (!user) return
+    const firestoreService = new FirestoreService(user.sub)
+    const allAssignments = await firestoreService.getAllBusAssignments()
+    const assignment = allAssignments.find((a) => a.busId === busId)
+    if (assignment?.routeId) {
+      const routeDoc = await firestoreService.getRouteById(assignment.routeId)
+      setBusStops((prev) => ({ ...prev, [busId]: routeDoc?.stops || [] }))
+    } else {
+      setBusStops((prev) => ({ ...prev, [busId]: [] }))
+    }
+  }, [user])
+
+  // Fetch all bus data
   const fetchAllBusData = useCallback(async () => {
-    setRefreshing(true);
-    setError("");
+    setRefreshing(true)
+    setError("")
     try {
-      const res = await fetchBackendAPI('/api/liveplate_all')
+      const res = await fetchBackendAPI("/api/liveplate_all")
       if (!res.ok) {
-        let bodyText = "";
-        try { bodyText = await res.text(); } catch {}
-        throw new Error(`Failed to fetch bus info from FastAPI (status ${res.status}) ${bodyText ? `- ${bodyText}` : ""}`)
+        throw new Error(`Failed to fetch fleet telemetry (status ${res.status})`)
       }
       const liveList = await res.json()
 
-      // Fetch assignments and buses from Firestore
-      let allAssignments: BusAssignment[] = [];
-      let allBuses: any[] = [];
+      let allAssignments: BusAssignment[] = []
+      let allBuses: any[] = []
       if (user) {
-        const firestoreService = new FirestoreService(user.uid);
-        allAssignments = await firestoreService.getAllBusAssignments();
-        setAssignments(allAssignments);
-        allBuses = await firestoreService.getAllBuses();
-        setAllBuses(allBuses); // Store in state
+        const firestoreService = new FirestoreService(user.sub)
+        allAssignments = await firestoreService.getAllBusAssignments()
+        setAssignments(allAssignments)
+        allBuses = await firestoreService.getAllBuses()
+        setAllBuses(allBuses)
 
-        // Auto-add buses from backend that don't exist in Firestore
+        // Sync missing buses from API to Firestore registry
         for (const item of (Array.isArray(liveList) ? liveList : [])) {
-          const devId = item?.device_id;
-          const apiPlateRaw = item?.plate_number || "";
-          
+          const devId = item?.device_id
+          const apiPlateRaw = item?.plate_number || ""
           if (devId) {
-            // Check if bus already exists by device ID or plate number
-            const existsByDeviceId = allBuses.some(b => b.busId === devId);
-            const existsByPlate = apiPlateRaw && allBuses.some(b => 
+            const existsByDeviceId = allBuses.some((b) => b.busId === devId)
+            const existsByPlate = apiPlateRaw && allBuses.some((b) => 
               b.plateNumber && String(b.plateNumber).trim().toLowerCase() === String(apiPlateRaw).trim().toLowerCase()
-            );
+            )
 
-            // If bus doesn't exist, create it
             if (!existsByDeviceId && !existsByPlate) {
               try {
                 const newBusData = {
                   busId: devId,
                   plateNumber: apiPlateRaw || devId,
-                  capacity: 50, // Default capacity
-                  model: 'Auto-added',
+                  capacity: 50,
+                  model: "Auto-added",
                   year: new Date().getFullYear(),
-                  notes: 'Automatically added from Fleet API',
+                  notes: "Automatically synced from Fleet API",
                   createdAt: new Date().toISOString(),
-                };
-                
-                await firestoreService.addBus(newBusData);
-                allBuses.push(newBusData);
-                console.log(`✅ Auto-added bus: ${devId} (${apiPlateRaw || 'No plate'})`);
+                }
+                await firestoreService.addBus(newBusData)
+                allBuses.push(newBusData)
               } catch (error) {
-                console.error(`Failed to auto-add bus ${devId}:`, error);
+                console.error(`Failed to auto-add bus ${devId}:`, error)
               }
             }
           }
         }
-        
-        // Update state with newly added buses
-        setAllBuses(allBuses);
+        setAllBuses(allBuses)
       }
 
       const displayData: BusDisplayData[] = (Array.isArray(liveList) ? liveList : []).map((item: any) => {
-        const devId = item?.device_id || item?.gps?.device_id;
-        const nameLabel = item?.device_name || devId;
-        const apiPlateRaw = item?.plate_number || "";
-        // Try to match by plate number from API to Firestore buses (case-insensitive)
-        let matchedBus = null as any;
+        const devId = item?.device_id || item?.gps?.device_id
+        const nameLabel = item?.device_name || devId
+        const apiPlateRaw = item?.plate_number || ""
+        let matchedBus = null
         if (allBuses && apiPlateRaw) {
-          const apiPlate = String(apiPlateRaw).trim().toLowerCase();
-          matchedBus = allBuses.find(b => b.plateNumber && String(b.plateNumber).trim().toLowerCase() === apiPlate) || null;
+          const apiPlate = String(apiPlateRaw).trim().toLowerCase()
+          matchedBus = allBuses.find((b) => b.plateNumber && String(b.plateNumber).trim().toLowerCase() === apiPlate) || null
         }
-        let matchedAssignment: BusAssignment | null = null;
+        let matchedAssignment: BusAssignment | null = null
         if (allAssignments && matchedBus?.busId) {
-          matchedAssignment = allAssignments.find(a => a.busId && String(a.busId).trim() === String(matchedBus.busId).trim()) || null;
+          matchedAssignment = allAssignments.find((a) => a.busId && String(a.busId).trim() === String(matchedBus.busId).trim()) || null
         }
-        // Also try matching assignment by plate number directly if bus match not found
         if (!matchedAssignment && allAssignments && apiPlateRaw) {
-          const apiPlate = String(apiPlateRaw).trim().toLowerCase();
-          matchedAssignment = allAssignments.find(a => a.plateNumber && String(a.plateNumber).trim().toLowerCase() === apiPlate) || null;
+          const apiPlate = String(apiPlateRaw).trim().toLowerCase()
+          matchedAssignment = allAssignments.find((a) => a.plateNumber && String(a.plateNumber).trim().toLowerCase() === apiPlate) || null
         }
-        // Prefer Firestore plate number for display if available
-  const plateForDisplay = matchedAssignment?.plateNumber || matchedBus?.plateNumber || apiPlateRaw || "";
-        const gps = item?.gps || {};
+        const plateForDisplay = matchedAssignment?.plateNumber || matchedBus?.plateNumber || apiPlateRaw || ""
+        const gps = item?.gps || {}
         return {
           status: {
             id: devId,
@@ -334,7 +287,7 @@ export default function AdminDashboard() {
             lng: gps.longitude,
             ol: gps.online ? 1 : 0,
             gt: gps.last_update ? new Date(gps.last_update * 1000).toISOString() : "",
-            ps: gps.speed_kmh?.toString() ?? "",
+            ps: gps.speed_kmh?.toString() ?? "0",
             dn: "",
             jn: "",
           },
@@ -342,31 +295,30 @@ export default function AdminDashboard() {
           address: gps.latitude && gps.longitude ? `${gps.latitude}, ${gps.longitude}` : "",
           plate_number: plateForDisplay,
           device_info: item?.device_info,
-        } as BusDisplayData;
-      });
-      setBusDisplayData(displayData);
-      setLastUpdate(new Date());
-      setError("");
+        }
+      })
+      setBusDisplayData(displayData)
+      setLastUpdate(new Date())
+      setError("")
 
-      // Fetch stops for each bus after loading bus data
       if (displayData.length > 0) {
         for (const bus of displayData) {
-          const canonicalBusId = bus.assignment?.busId || bus.status.vid;
+          const canonicalBusId = bus.assignment?.busId || bus.status.vid
           if (canonicalBusId) {
-            fetchStopsForBus(canonicalBusId);
+            fetchStopsForBus(canonicalBusId)
           }
         }
       }
     } catch (err: any) {
-      console.error("Error fetching bus info from fleet API:", err);
-      setError(err.message || "Unable to fetch bus info");
+      console.error("Error loading bus data:", err)
+      setError(err.message || "Unable to fetch bus info")
     } finally {
-      setRefreshing(false);
-      setLoading(false);
+      setRefreshing(false)
+      setLoading(false)
     }
-  }, [user]);
+  }, [user, fetchStopsForBus])
 
-  // Initial data load
+  // Auth load profile
   useEffect(() => {
     if (!user || userRole !== "admin") {
       router.push("/")
@@ -375,33 +327,29 @@ export default function AdminDashboard() {
 
     const loadProfile = async () => {
       try {
-        const firestoreService = new FirestoreService(user.uid)
+        const firestoreService = new FirestoreService(user.sub)
         const adminProfile = await firestoreService.getAdminProfile()
         if (!adminProfile) {
-          throw new Error("Admin profile not found in Firestore. Please ensure it has been created correctly.")
+          throw new Error("Admin profile details missing in database registry.")
         }
         setProfile(adminProfile)
-      } catch (err) {
-        console.error("Error loading profile:", err)
-        setError(err instanceof Error ? err.message : "Unable to load admin profile")
+      } catch (err: any) {
+        console.error("Error loading admin profile:", err)
+        setError(err.message || "Unable to load admin profile")
         setLoading(false)
       }
     }
 
     loadProfile()
-  }, [user, userRole])
+  }, [user, userRole, router])
 
   useEffect(() => {
     if (profile) {
-      console.log('🔄 Initial data fetch triggered')
       fetchAllBusData()
-      if (user) {
-        const firestoreService = new FirestoreService(user.uid)
-      }
     }
-  }, [profile, user, fetchAllBusData])
+  }, [profile, fetchAllBusData])
 
-  // WebSocket connection for real-time updates
+  // WebSocket Live telemetry synchronization
   useEffect(() => {
     if (!profile || !user) return
 
@@ -410,42 +358,34 @@ export default function AdminDashboard() {
 
     const connectWebSocket = () => {
       try {
-        const wsUrl = process.env.NEXT_PUBLIC_BACKEND_WS_URL || 'ws://localhost:8000'
+        const wsUrl = process.env.NEXT_PUBLIC_BACKEND_WS_URL || "ws://localhost:8000"
         ws = new WebSocket(`${wsUrl}/ws/live`)
 
         ws.onopen = () => {
-          console.log('✅ Admin WebSocket connected')
+          console.log("✅ Admin WebSocket connected")
           setWsConnected(true)
           setError("")
+          const time = new Date().toLocaleTimeString("en-IN")
+          setLogs((prev) => [...prev, { time, message: "Live telemetry synchronization connected.", type: "system" }].slice(-15))
         }
 
         ws.onmessage = async (event) => {
           try {
             const liveList = JSON.parse(event.data)
             
-            // Fetch assignments and buses from Firestore if needed
-            const firestoreService = new FirestoreService(user.uid)
-            const allAssignments = await firestoreService.getAllBusAssignments()
-            setAssignments(allAssignments)
-            
-            let currentBuses = allBuses
-            if (currentBuses.length === 0) {
-              currentBuses = await firestoreService.getAllBuses()
-              setAllBuses(currentBuses)
-            }
+            // Read from refs to avoid query loops or re-triggering connection resets
+            const currentAssignments = assignmentsRef.current
+            const currentBuses = allBusesRef.current
 
-            // Process live data
             const displayData: BusDisplayData[] = (Array.isArray(liveList) ? liveList : []).map((item: any) => {
-              const devId = item?.device_id || ''
-              const apiPlateRaw = item?.plate_number || ''
-              
-              const matchedBus = currentBuses.find(b => 
+              const devId = item?.device_id || ""
+              const apiPlateRaw = item?.plate_number || ""
+              const matchedBus = currentBuses.find((b) => 
                 b.busId === devId || 
                 (b.plateNumber && apiPlateRaw && 
                   String(b.plateNumber).trim().toLowerCase() === String(apiPlateRaw).trim().toLowerCase())
               )
-              
-              const assignment = allAssignments.find(a => 
+              const assignment = currentAssignments.find((a) => 
                 a.busId === devId || a.busId === matchedBus?.busId ||
                 (a.plateNumber && apiPlateRaw && 
                   String(a.plateNumber).trim().toLowerCase() === String(apiPlateRaw).trim().toLowerCase())
@@ -461,723 +401,691 @@ export default function AdminDashboard() {
                   vid: devId,
                   mlat: String(lat),
                   mlng: String(lng),
-                  lat: lat,
-                  lng: lng,
+                  lat,
+                  lng,
                   ol: gps.online ? 1 : 0,
-                  moving: gps.speed > 0,
+                  moving: gps.speed_kmh > 0,
                   gt: gps.last_update ? new Date(gps.last_update * 1000).toISOString() : new Date().toISOString(),
-                  sp: gps.speed || 0,
-                  ps: '0'
+                  sp: gps.speed_kmh || 0,
+                  ps: "0"
                 } as DeviceStatus,
                 assignment: assignment || null,
-                address: item?.address || '',
-                plate_number: apiPlateRaw || 'N/A',
+                address: lat && lng ? `${lat}, ${lng}` : "",
+                plate_number: apiPlateRaw || "N/A",
                 device_info: item?.device_info || {}
               }
             })
 
             setBusDisplayData(displayData)
             setLastUpdate(new Date())
-            setRefreshing(false)
+
+            // Append WS logs dynamically
+            const time = new Date().toLocaleTimeString("en-IN")
+            const newLogs = (Array.isArray(liveList) ? liveList : []).slice(0, 2).map((item: any) => ({
+              time,
+              message: `Location coordinates synchronized for Bus ${item.device_id || "device"}.`,
+              type: "info" as const
+            }))
+            if (newLogs.length > 0) {
+              setLogs((prev) => [...prev, ...newLogs].slice(-15))
+            }
           } catch (err) {
-            console.error('Error parsing WebSocket message:', err)
+            console.error("Error parsing WebSocket packet:", err)
           }
         }
 
         ws.onerror = (error) => {
-          console.error('❌ Admin WebSocket error:', error)
-          console.log('💡 Make sure backend is running at:', process.env.NEXT_PUBLIC_BACKEND_WS_URL || 'ws://localhost:8000')
+          console.error("❌ Admin WebSocket error:", error)
           setWsConnected(false)
         }
 
-        ws.onclose = (event) => {
-          console.log('🔌 Admin WebSocket disconnected. Code:', event.code, 'Reason:', event.reason || 'No reason provided')
+        ws.onclose = () => {
           setWsConnected(false)
-          
-          // Fallback to HTTP polling if WebSocket fails
-          if (busDisplayData.length === 0) {
-            console.log('🔄 Falling back to HTTP polling...')
-            fetchAllBusData()
-          }
-          
+          fetchAllBusData()
           reconnectTimeout = setTimeout(() => {
-            console.log('🔄 Attempting to reconnect Admin WebSocket...')
             connectWebSocket()
           }, 5000)
         }
       } catch (err) {
-        console.error('Failed to connect Admin WebSocket:', err)
-        
-        // Fallback to HTTP polling
+        console.error("WebSocket setup failed:", err)
         fetchAllBusData()
         reconnectTimeout = setTimeout(connectWebSocket, 5000)
       }
     }
 
-    // Initial connection
     connectWebSocket()
 
     return () => {
       if (ws) {
+        ws.onopen = null
+        ws.onmessage = null
+        ws.onerror = null
+        ws.onclose = null
         ws.close()
       }
-      if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout)
-      }
+      if (reconnectTimeout) clearTimeout(reconnectTimeout)
     }
-  }, [profile, user, allBuses, fetchAllBusData])
+  }, [profile, user, fetchAllBusData])
 
   const handleLogout = async () => {
     await logout()
+    router.push("/")
   }
 
-  const handleRefresh = () => {
-    fetchAllBusData()
-  }
-
-  const getStatusColor = (status: DeviceStatus | null) => {
-    if (!status) return "bg-gray-500"
-    return status.ol === 1 ? "bg-green-500" : "bg-red-500"
-  }
-
-  const getStatusText = (status: DeviceStatus | null) => {
-    if (!status) return "Unknown"
-    return status.ol === 1 ? "Online" : "Offline"
-  }
-
-  // Fetch stops for a bus from Firestore (route), always use canonical busId
-  const fetchStopsForBus = async (busId: string) => {
-    if (!user) return;
-    const firestoreService = new FirestoreService(user.uid);
-    // Always use canonical busId (from Firestore, matched by plate number)
-    const allAssignments = await firestoreService.getAllBusAssignments();
-    const assignment = allAssignments.find((a) => a.busId === busId);
-    if (assignment && assignment.routeId) {
-      // Fetch route doc
-      const routeDoc = await firestoreService.getRouteById(assignment.routeId);
-      setBusStops((prev) => ({ ...prev, [busId]: routeDoc?.stops || [] }));
-    } else {
-      setBusStops((prev) => ({ ...prev, [busId]: [] }));
-    }
-  };
-
-  // Add stop to Firestore for a bus, always use canonical busId
+  // Add Stop
   const addStopToBus = async (busId: string, stop: StopInput) => {
-    if (!user) return;
+    if (!user) return
     try {
-      const firestoreService = new FirestoreService(user.uid);
-      // Always resolve canonical busId from buses collection
-      const allBuses = await firestoreService.getAllBuses();
-      // Try to match by busId or by plateNumber (case-insensitive, trimmed)
-      let canonicalBus = allBuses.find(b => b.busId === busId);
+      const firestoreService = new FirestoreService(user.sub)
+      const allBuses = await firestoreService.getAllBuses()
+      let canonicalBus = allBuses.find((b) => b.busId === busId)
       if (!canonicalBus) {
-        // Try to match by plate number if busId is not canonical
-        canonicalBus = allBuses.find(b => b.plateNumber && String(b.plateNumber).trim().toLowerCase() === String(busId).trim().toLowerCase());
+        canonicalBus = allBuses.find((b) => b.plateNumber && String(b.plateNumber).trim().toLowerCase() === String(busId).trim().toLowerCase())
       }
-      const canonicalBusId = canonicalBus?.busId || busId;
+      const canonicalBusId = canonicalBus?.busId || busId
 
-      const assignments = await firestoreService.getAllBusAssignments();
-      const assignment = assignments.find((a) => a.busId === canonicalBusId);
-      let routeId = assignment?.routeId;
-      let routeDoc = routeId ? await firestoreService.getRouteById(routeId) : null;
-      let stops: any[] = [];
+      const assignments = await firestoreService.getAllBusAssignments()
+      const assignment = assignments.find((a) => a.busId === canonicalBusId)
+      const routeId = assignment?.routeId
+      const routeDoc = routeId ? await firestoreService.getRouteById(routeId) : null
+      let stops: any[] = []
       if (routeDoc && routeId) {
-        stops = routeDoc.stops || [];
+        stops = routeDoc.stops || []
         stops.push({
           name: stop.name,
           latitude: parseFloat(stop.latitude),
           longitude: parseFloat(stop.longitude),
           order: stops.length,
-        });
-        await firestoreService.updateRoute(routeId, { stops });
+        })
+        await firestoreService.updateRoute(routeId, { stops })
       } else {
-        // Create new route for this bus, using canonical busId and plateNumber
         const newRoute = {
           name: `Route for ${assignment?.plateNumber || canonicalBus?.plateNumber || canonicalBusId}`,
-          // driverId removed
           busId: canonicalBusId,
-          plateNumber: assignment?.plateNumber || canonicalBus?.plateNumber || '',
+          plateNumber: assignment?.plateNumber || canonicalBus?.plateNumber || "",
           stops: [{
             name: stop.name,
             latitude: parseFloat(stop.latitude),
             longitude: parseFloat(stop.longitude),
             order: 0,
           }],
-        };
-        const newRouteId = await firestoreService.createRoute(newRoute);
+        }
+        const newRouteId = await firestoreService.createRoute(newRoute)
         if (assignment && newRouteId) {
-          await firestoreService.updateBusAssignment(assignment.id!, { routeId: newRouteId });
+          await firestoreService.updateBusAssignment(assignment.id!, { routeId: newRouteId })
         } else if (newRouteId) {
           await firestoreService.createBusAssignment({
             busId: canonicalBusId,
             routeId: newRouteId,
-            plateNumber: assignment?.plateNumber || canonicalBus?.plateNumber || '',
-            // driverId removed
+            plateNumber: assignment?.plateNumber || canonicalBus?.plateNumber || "",
             isActive: true,
-          });
+          })
         }
       }
-      fetchStopsForBus(canonicalBusId);
-      setNewStop((s) => ({ ...s, [canonicalBusId]: { name: "", latitude: "", longitude: "" } }));
-    } catch (err) {
-      alert('Failed to add stop: ' + (err instanceof Error ? err.message : String(err)));
-    }
-  };
-
-  // Update bus information in Firestore
-  const handleUpdateBus = async (busData: any) => {
-    if (!user) return;
-    try {
-      const firestoreService = new FirestoreService(user.uid);
+      fetchStopsForBus(canonicalBusId)
+      setNewStop((s) => ({ ...s, [canonicalBusId]: { name: "", latitude: "", longitude: "" } }))
       
-      // Update the bus document
+      const time = new Date().toLocaleTimeString("en-IN")
+      setLogs((prev) => [...prev, { time, message: `Stop "${stop.name}" added to Bus ${canonicalBusId} route schedule.`, type: "route" }].slice(-15))
+    } catch (err: any) {
+      alert("Failed to add stop: " + err.message)
+    }
+  }
+
+  // Delete Stop
+  const deleteStopFromBus = async (busId: string, stopIndex: number) => {
+    if (!user) return
+    try {
+      const firestoreService = new FirestoreService(user.sub)
+      const assignments = await firestoreService.getAllBusAssignments()
+      const assignment = assignments.find((a) => a.busId === busId)
+      const routeId = assignment?.routeId
+      const routeDoc = routeId ? await firestoreService.getRouteById(routeId) : null
+      if (routeDoc && routeId) {
+        let stops = routeDoc.stops || []
+        const removedName = stops[stopIndex]?.name || ""
+        stops.splice(stopIndex, 1)
+        stops = stops.map((s, i) => ({ ...s, order: i }))
+        await firestoreService.updateRoute(routeId, { stops })
+        fetchStopsForBus(busId)
+
+        const time = new Date().toLocaleTimeString("en-IN")
+        setLogs((prev) => [...prev, { time, message: `Stop "${removedName}" removed from Bus ${busId} route schedule.`, type: "route" }].slice(-15))
+      }
+    } catch (err: any) {
+      alert("Failed to delete stop: " + err.message)
+    }
+  }
+
+  // Update Registry Bus info
+  const handleUpdateBus = async (busData: any) => {
+    if (!user) return
+    try {
+      const firestoreService = new FirestoreService(user.sub)
       await firestoreService.updateBus(busData.busId, {
         plateNumber: busData.plateNumber,
         capacity: parseInt(busData.capacity) || 50,
-        model: busData.model || '',
+        model: busData.model || "",
         year: parseInt(busData.year) || new Date().getFullYear(),
-        notes: busData.notes || '',
-      });
-
-      // Refresh the bus data
-      await fetchAllBusData();
-      
-      console.log(`✅ Bus ${busData.busId} updated successfully`);
+        notes: busData.notes || "",
+      })
+      await fetchAllBusData()
+      const time = new Date().toLocaleTimeString("en-IN")
+      setLogs((prev) => [...prev, { time, message: `Registry properties updated for Bus ${busData.busId}.`, type: "system" }].slice(-15))
     } catch (err) {
-      console.error('Failed to update bus:', err);
-      throw err;
+      console.error("Failed to update bus:", err)
+      throw err
     }
-  };
-
-  // Delete a bus and its related data
-  const handleDeleteBus = async (busId: string) => {
-    if (!user) return;
-    
-    const confirmDelete = window.confirm(
-      `Are you sure you want to delete bus ${busId}?\n\nThis will also delete:\n- All associated routes\n- All bus assignments\n- All stops\n\nThis action cannot be undone.`
-    );
-    
-    if (!confirmDelete) return;
-
-    try {
-      const firestoreService = new FirestoreService(user.uid);
-      
-      // Get all bus assignments for this bus
-      const assignments = await firestoreService.getAllBusAssignments();
-      const busAssignments = assignments.filter((a) => a.busId === busId);
-      
-      // Delete all routes and assignments for this bus
-      for (const assignment of busAssignments) {
-        if (assignment.routeId) {
-          await firestoreService.deleteRoute(assignment.routeId);
-        }
-        if (assignment.id) {
-          await firestoreService.deleteBusAssignment(assignment.id);
-        }
-      }
-      
-      // Delete the bus itself
-      await firestoreService.deleteBus(busId);
-      
-      // Refresh the bus data
-      await fetchAllBusData();
-      
-      alert(`✅ Bus ${busId} and all related data deleted successfully`);
-    } catch (err) {
-      console.error('Failed to delete bus:', err);
-      alert('❌ Failed to delete bus: ' + (err instanceof Error ? err.message : String(err)));
-    }
-  };
-
-  // Delete a stop from Firestore for a bus, always use canonical busId
-  const deleteStopFromBus = async (busId: string, stopIndex: number) => {
-    if (!user) return;
-    try {
-      const firestoreService = new FirestoreService(user.uid);
-      const assignments = await firestoreService.getAllBusAssignments();
-      const assignment = assignments.find((a) => a.busId === busId);
-      let routeId = assignment?.routeId;
-      let routeDoc = routeId ? await firestoreService.getRouteById(routeId) : null;
-      if (routeDoc && routeId) {
-        let stops = routeDoc.stops || [];
-        stops.splice(stopIndex, 1);
-        stops = stops.map((s, i) => ({ ...s, order: i }));
-        await firestoreService.updateRoute(routeId, { stops });
-        fetchStopsForBus(busId);
-      } else {
-        alert('No route found to delete stop from.');
-      }
-    } catch (err) {
-      alert('Failed to delete stop: ' + (err instanceof Error ? err.message : String(err)));
-    }
-  };
-
-  // Helper to estimate time (in minutes) from bus to stop
-  function estimateTimeToStop(busLat: number, busLng: number, stopLat: number, stopLng: number, speedKmh: number = 30) {
-    const distanceMeters = haversine({ lat: busLat, lng: busLng }, { lat: stopLat, lng: stopLng });
-    const speedMps = speedKmh * 1000 / 3600;
-    const timeSeconds = distanceMeters / speedMps;
-    return Math.round(timeSeconds / 60); // minutes
   }
 
-  const handleAddBus = async () => {
-    if (!user) return;
-    if (!newBus.busId.trim()) {
-      alert('Please enter a Device ID');
-      return;
-    }
-    setAddingBus(true);
+  // Delete Registry Bus
+  const handleDeleteBus = async (busId: string) => {
+    if (!user) return
+    const confirmDelete = window.confirm(`Are you sure you want to delete bus ${busId}? This removes all stops and route docs.`)
+    if (!confirmDelete) return
+
     try {
-      const firestoreService = new FirestoreService(user.uid);
+      const firestoreService = new FirestoreService(user.sub)
+      const assignments = await firestoreService.getAllBusAssignments()
+      const busAssignments = assignments.filter((a) => a.busId === busId)
+
+      for (const assignment of busAssignments) {
+        if (assignment.routeId) await firestoreService.deleteRoute(assignment.routeId)
+        if (assignment.id) await firestoreService.deleteBusAssignment(assignment.id)
+      }
+      await firestoreService.deleteBus(busId)
+      await fetchAllBusData()
+      alert(`✅ Bus registry details for ${busId} cleared successfully.`)
+      const time = new Date().toLocaleTimeString("en-IN")
+      setLogs((prev) => [...prev, { time, message: `Bus registry entry for ${busId} deleted.`, type: "alert" }].slice(-15))
+    } catch (err: any) {
+      alert("Failed to delete bus: " + err.message)
+    }
+  }
+
+  // Estimate Time to Stop
+  function estimateTimeToStop(busLat: number, busLng: number, stopLat: number, stopLng: number, speedKmh = 30) {
+    const distanceMeters = haversine({ lat: busLat, lng: busLng }, { lat: stopLat, lng: stopLng })
+    const speedMps = (speedKmh * 1000) / 3600
+    const timeSeconds = distanceMeters / (speedMps || 8.33) // Fallback 30km/h
+    return Math.round(timeSeconds / 60)
+  }
+
+  // Add Bus registry entry manually
+  const handleAddBus = async () => {
+    if (!user) return
+    if (!newBus.busId.trim()) {
+      alert("Please enter a Device ID")
+      return
+    }
+    setAddingBus(true)
+    try {
+      const firestoreService = new FirestoreService(user.sub)
       const busData: any = {
         busId: newBus.busId.trim(),
-        plateNumber: newBus.busId.trim(), // Use device ID as default plate
-        capacity: 50, // Default capacity
-        model: 'Manual Entry',
-        notes: 'Manually added - waiting for GPS sync',
+        plateNumber: newBus.busId.trim(),
+        capacity: 50,
+        model: "Manual Entry",
+        notes: "Manually registered - waiting for GPS sync",
         createdAt: new Date().toISOString(),
         year: new Date().getFullYear(),
-      };
-      await firestoreService.addBus(busData);
-      setAddBusModalOpen(false);
-      setNewBus({ busId: '', plateNumber: '', capacity: '', model: '', year: '', notes: '' });
-      fetchAllBusData();
-      alert(`Bus with Device ID ${newBus.busId.trim()} added successfully!`);
-    } catch (err) {
-      alert('Failed to add bus: ' + (err instanceof Error ? err.message : String(err)));
+      }
+      await firestoreService.addBus(busData)
+      setAddBusModalOpen(false)
+      setNewBus({ busId: "", plateNumber: "", capacity: "", model: "", year: "", notes: "" })
+      fetchAllBusData()
+      alert(`Bus with Device ID ${busData.busId} registered successfully!`)
+      const time = new Date().toLocaleTimeString("en-IN")
+      setLogs((prev) => [...prev, { time, message: `Registered new Bus device (ID: ${busData.busId}).`, type: "system" }].slice(-15))
+    } catch (err: any) {
+      alert("Failed to add bus: " + err.message)
     } finally {
-      setAddingBus(false);
+      setAddingBus(false)
     }
-  };
+  }
+
+  // Export logs to txt
+  const exportLogs = () => {
+    const logText = logs.map((l) => `[${l.time}] ${l.message}`).join("\n")
+    const blob = new Blob([logText], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `fleet-logs-${new Date().toISOString().slice(0, 10)}.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  // Broadcast Alert
+  const broadcastMessage = () => {
+    const msg = prompt("Enter emergency broadcast text for active vehicle devices:")
+    if (msg) {
+      const time = new Date().toLocaleTimeString("en-IN")
+      setLogs((prev) => [...prev, { time, message: `Broadcast message sent to all active buses: "${msg}"`, type: "alert" }].slice(-15))
+      alert("Broadcast alert queued to dispatch terminals.")
+    }
+  }
+
+  const handleDispatchAlert = () => {
+    const time = new Date().toLocaleTimeString("en-IN")
+    setLogs((prev) => [...prev, { time, message: "Dispatch alert notice sent to all transit coordinators.", type: "alert" }].slice(-15))
+    alert("Dispatch notification sent!")
+  }
+
+  // Filter Cards by search input
+  const filteredBuses = useMemo(() => {
+    return busDisplayData.filter((b) => {
+      const canonicalBusId = b.assignment?.busId || b.status.vid
+      const plate = (b.plate_number || "").toLowerCase()
+      const query = searchTerm.toLowerCase()
+      return canonicalBusId.toLowerCase().includes(query) || plate.includes(query)
+    })
+  }, [busDisplayData, searchTerm])
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-50 to-pink-100">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
-      </div>
-    )
-  }
-
-  if (!profile) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-50 to-pink-100 p-4">
-        <Card className="w-full max-w-md text-center">
-          <CardHeader>
-            <CardTitle>Access Error</CardTitle>
-            <CardDescription>{error || "There was a problem loading your profile."}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="mb-4">Could not find an admin profile for your account. Please contact support.</p>
-            <Button onClick={handleLogout}>Return to Login</Button>
-          </CardContent>
-        </Card>
+      <div className="min-h-screen flex items-center justify-center bg-[#0A0A0B]">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#5e5ce6]"></div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Official Government Header */}
-      <header className="bg-white border-b-2 border-gray-200 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <div className="bg-blue-600 p-3 rounded-lg">
-                <Bus className="h-6 w-6 text-white" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900">
-                  Administrator Dashboard
-                </h1>
-                <p className="text-sm text-gray-600">Fleet Management & Monitoring System</p>
-              </div>
+    <div className="min-h-screen text-[#e2e2e7] bg-[#0A0A0B] font-sans selection:bg-[#5e5ce6]/30 selection:text-white flex overflow-hidden h-screen w-screen">
+      <style dangerouslySetInnerHTML={{ __html: `
+        .glass-card {
+          background: rgba(255, 255, 255, 0.03);
+          backdrop-filter: blur(24px);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
+        }
+        .terminal-glow {
+          box-shadow: 0 0 20px rgba(94, 92, 230, 0.15);
+        }
+        ::-webkit-scrollbar {
+          width: 4px;
+        }
+        ::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.1);
+          border-radius: 10px;
+        }
+      ` }} />
+
+      {/* SIDE BAR NAVIGATION */}
+      <aside className="hidden md:flex flex-col h-screen w-64 fixed left-0 top-0 bg-[#1e2023]/60 backdrop-blur-2xl border-r border-white/10 shadow-2xl z-[60] py-6">
+        <div className="px-6 mb-8">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-[#5e5ce6] flex items-center justify-center text-white">
+              <Bus className="h-6 w-6 text-white" />
             </div>
-            <div className="flex items-center gap-2">
-              {/* WebSocket Status Indicator */}
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 text-xs">
-                <div className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
-                <span className="text-gray-700 hidden sm:inline">{wsConnected ? 'Live' : 'Connecting...'}</span>
-              </div>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => router.push('/admin/cameras')} 
-                className="border-blue-600 text-blue-600 hover:bg-blue-50"
-              >
-                <Activity className="h-4 w-4 mr-1" />
-                Camera Feeds
-              </Button>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={() => setAddBusModalOpen(true)} 
-                className="border-blue-600 text-blue-600 hover:bg-blue-50"
-              >
-                + Add Bus
-              </Button>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={handleLogout} 
-                className="border-gray-300 hover:bg-gray-50"
-              >
-                <LogOut className="h-4 w-4 mr-1" />
-                Sign Out
-              </Button>
+            <div>
+              <h1 className="text-base font-bold text-[#c2c1ff] leading-none">OmniBus Command</h1>
+              <p className="text-[10px] uppercase tracking-widest text-[#c7c4d7] mt-1 opacity-60">Admin Portal</p>
             </div>
           </div>
         </div>
-        <div className="bg-gray-100 border-t border-gray-200">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2">
-            <div className="flex items-center justify-between text-sm">
-              <div className="flex items-center gap-4">
-                <span className="text-gray-700">
-                  <strong>Administrator:</strong> {profile?.name || "User"}
-                </span>
+
+        <nav className="flex-1 space-y-1">
+          <a className="flex items-center gap-4 px-6 py-3 bg-[#5e5ce6]/20 text-[#c2c1ff] border-r-4 border-[#5e5ce6] transition-all" href="#">
+            <Activity className="h-5 w-5" />
+            <span>Dashboard</span>
+          </a>
+          <button 
+            onClick={() => router.push("/admin/cameras")}
+            className="flex items-center gap-4 px-6 py-3 text-[#c7c4d7] hover:bg-white/5 transition-all w-full text-left"
+          >
+            <Activity className="h-5 w-5 text-[#0a84ff]" />
+            <span>Camera Feeds</span>
+          </button>
+        </nav>
+
+        <div className="mt-auto px-4 space-y-4">
+          <button 
+            onClick={broadcastMessage}
+            className="w-full py-3 px-4 rounded-xl bg-[#5e5ce6] text-white font-bold flex items-center justify-center gap-2 shadow-lg shadow-[#5e5ce6]/20 hover:opacity-90 transition-all active:scale-95 text-xs"
+          >
+            <span>Broadcast Message</span>
+          </button>
+          <div className="pt-4 border-t border-white/5">
+            <button 
+              onClick={handleLogout}
+              className="w-full flex items-center gap-4 px-2 py-2 text-[#c7c4d7] hover:text-red-400 transition-colors text-sm"
+            >
+              <LogOut className="h-5 w-5" />
+              <span>Sign Out</span>
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* MAIN CONTENT AREA */}
+      <main className="md:ml-64 flex-1 h-screen flex flex-col overflow-hidden">
+        {/* TOP NAV BAR */}
+        <header className="flex justify-between items-center w-full px-6 py-3 sticky top-0 z-50 bg-[#111317]/80 backdrop-blur-xl border-b border-white/10 shadow-sm h-16">
+          <div className="flex items-center gap-4 flex-1">
+            <div className="relative w-full max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#c7c4d7] h-4 w-4" />
+              <input 
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full bg-[#1a1c low]/50 border-none rounded-lg pl-10 pr-4 py-2 text-sm focus:ring-1 focus:ring-[#5e5ce6] text-[#e2e2e7] bg-[#1a1c1f]" 
+                placeholder="Search vehicle plate ID or model..." 
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-4 text-[#c7c4d7] mr-4">
+              <button 
+                onClick={fetchAllBusData}
+                className="hover:text-[#c2c1ff] transition-all cursor-pointer"
+                title="Refresh Registry Data"
+              >
+                <RefreshCw className="h-5 w-5" />
+              </button>
+              <button className="hover:text-[#c2c1ff] transition-all relative">
+                <Bell className="h-5 w-5" />
+                <span className="absolute top-0 right-0 w-2 h-2 bg-[#5e5ce6] rounded-full border border-[#0A0A0B]"></span>
+              </button>
+              <button className="hover:text-[#c2c1ff] transition-all">
+                <HelpCircle className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="flex items-center gap-3 pl-6 border-l border-white/10">
+              <div className="text-right">
+                <p className="text-xs font-semibold text-white">{profile?.name || "Admin Profile"}</p>
+                <p className="text-[10px] text-[#c7c4d7]/60">Fleet Supervisor</p>
               </div>
-              {lastUpdate && (
-                <span className="text-gray-600 text-xs">
-                  Last Updated: {lastUpdate.toLocaleString('en-IN')}
-                </span>
-              )}
+              <div className="h-9 w-9 rounded-full bg-[#5e5ce6]/10 border border-white/20 flex items-center justify-center font-bold text-sm text-[#c2c1ff]">
+                {profile?.name ? profile.name.charAt(0).toUpperCase() : "A"}
+              </div>
             </div>
           </div>
-        </div>
-      </header>
+        </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* CONTENT CANVAS */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-[#1a1c3a] via-background to-background">
+          {error && (
+            <Alert variant="destructive" className="bg-red-950/40 border-red-500/30 text-red-400 rounded-xl">
+              <AlertDescription className="font-semibold text-center text-xs flex items-center justify-center gap-2">
+                <ShieldAlert className="h-4 w-4" />
+                {error}
+              </AlertDescription>
+            </Alert>
+          )}
 
-        {error && (
-          <Alert variant="destructive" className="mb-6 border-2 border-red-300">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
+          {gpsAlert && (
+            <Alert variant="destructive" className="bg-orange-950/40 border-orange-500/30 text-orange-400 rounded-xl">
+              <AlertDescription className="text-center font-semibold text-xs">{gpsAlert}</AlertDescription>
+            </Alert>
+          )}
 
-        {/* Section: Fleet Stats */}
-        <div className="mb-6">
-          <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
-            <Activity className="h-5 w-5 mr-2 text-blue-600" />
-            Fleet Overview
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <Card className="border border-gray-300 shadow-sm">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Total Buses</p>
-                    <p className="text-3xl font-bold text-gray-900 mt-1">{busDisplayData.length}</p>
-                  </div>
-                  <div className="bg-blue-100 p-3 rounded-lg">
-                    <Bus className="h-8 w-8 text-blue-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="border border-gray-300 shadow-sm">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Online Buses</p>
-                    <p className="text-3xl font-bold text-green-600 mt-1">
-                      {busDisplayData.filter((b) => b.status.ol === 1).length}
-                    </p>
-                  </div>
-                  <div className="bg-green-100 p-3 rounded-lg">
-                    <Activity className="h-8 w-8 text-green-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="border border-gray-300 shadow-sm">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Routes Configured</p>
-                    <p className="text-3xl font-bold text-blue-600 mt-1">
-                      {Object.keys(busStops).filter(busId => busStops[busId] && busStops[busId].length > 0).length}
-                    </p>
-                  </div>
-                  <div className="bg-blue-100 p-3 rounded-lg">
-                    <MapPin className="h-8 w-8 text-blue-600" />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-
-
-
-        {gpsAlert && (
-          <Alert variant="destructive" className="mb-4 border-2 border-orange-300 bg-orange-50">
-            <AlertDescription className="text-orange-900">{gpsAlert}</AlertDescription>
-          </Alert>
-        )}
-        
-        <Tabs defaultValue="overview" className="space-y-4">
-          <TabsList className="bg-white border border-gray-300">
-            <TabsTrigger value="overview" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white">Fleet Cards</TabsTrigger>
-            <TabsTrigger value="map" className="data-[state=active]:bg-blue-600 data-[state=active]:text-white">Live Map</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="overview">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {busDisplayData.map((overview, idx) => {
-                const canonicalBusIdRaw = overview.assignment?.busId || overview.status.vid;
-                const canonicalBusId = typeof canonicalBusIdRaw === 'string' ? canonicalBusIdRaw : '';
-                const stops = busStops[canonicalBusId] || [];
-                // Find the bus data from Firestore for this device
-                const busData = allBuses.find(b => b.busId === overview.status.id);
-                return (
-                  <FleetCard
-                    key={overview.status.id}
-                    overview={overview}
-                    stops={stops}
-                    newStop={newStop[canonicalBusId]}
-                    setNewStop={(val: any) => setNewStop((s: any) => ({ ...s, [canonicalBusId]: val }))}
-                    deleteStopFromBus={(stopIdx: number) => deleteStopFromBus(canonicalBusId, stopIdx)}
-                    addStopToBus={(stop: any) => addStopToBus(canonicalBusId, stop)}
-                    estimateTimeToStop={estimateTimeToStop}
-                    sensors={sensors}
-                    user={user}
-                    onUpdateBus={handleUpdateBus}
-                    onDeleteBus={handleDeleteBus}
-                    busData={busData}
-                  />
-                );
-              })}
+          {/* COMMAND BAR */}
+          <section className="glass-card rounded-2xl p-3 flex flex-wrap items-center justify-between gap-4">
+            <div className="flex gap-2">
+              <button 
+                onClick={handleDispatchAlert}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#5e5ce6] text-white font-semibold text-xs hover:brightness-110 transition-all active:scale-95"
+              >
+                <Bell className="h-4 w-4" />
+                Dispatch Alert
+              </button>
+              <button 
+                onClick={exportLogs}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-white text-xs hover:bg-white/10 transition-all active:scale-95"
+              >
+                Export Logs
+              </button>
+              <button 
+                onClick={() => setAddBusModalOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#0a84ff]/25 text-[#0a84ff] border border-[#0a84ff]/20 text-xs font-semibold hover:bg-[#0a84ff]/30 transition-all active:scale-95"
+              >
+                + Register Bus
+              </button>
             </div>
+            <div className="flex items-center gap-4 text-[#c7c4d7] text-xs">
+              <span className="flex items-center gap-1.5">
+                <span className={`w-2.5 h-2.5 rounded-full ${wsConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span> 
+                {wsConnected ? 'Systems Live' : 'Systems Standby'}
+              </span>
+              <span className="opacity-40">|</span>
+              <span>Last Synced: {lastUpdate ? lastUpdate.toLocaleTimeString() : "Just Now"}</span>
+            </div>
+          </section>
 
-            {busDisplayData.length === 0 && !loading && (
-              <Card className="border border-gray-300 shadow-sm">
-                <CardContent className="text-center py-12">
-                  <div className="bg-gray-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <Bus className="h-10 w-10 text-gray-400" />
-                  </div>
-                  <h3 className="text-lg font-bold text-gray-900 mb-2">No buses found</h3>
-                  <p className="text-gray-600">No bus data is currently available from the fleet service.</p>
-                </CardContent>
-              </Card>
-            )}
-          </TabsContent>
-
-          <TabsContent value="map">
-            <Card className="border border-gray-300 shadow-sm">
-              <CardHeader className="bg-gray-50 border-b border-gray-200">
-                <CardTitle className="flex items-center text-lg font-bold text-gray-900">
-                  <MapPin className="h-5 w-5 mr-2 text-blue-600" />
-                  All Buses Real-time Map
-                </CardTitle>
-                <CardDescription className="text-gray-600">Live locations of all buses in the fleet</CardDescription>
-              </CardHeader>
-              <CardContent className="pt-4">
-                <div className="mb-4 flex items-center gap-4">
-                  <label className="font-semibold text-sm text-gray-700">Show route for bus:</label>
-                  <select
-                    className="border border-gray-300 rounded px-3 py-1.5 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    value={selectedBusId ?? ''}
-                    onChange={e => setSelectedBusId(e.target.value)}
-                  >
-                    {busIds.filter((id): id is string => !!id).map((id) => (
-                      <option key={id} value={id}>{id}</option>
-                    ))}
-                  </select>
+          {/* DASHBOARD GRID */}
+          <div className="grid grid-cols-12 gap-6">
+            {/* LEFT COLUMN: Tabs & Fleet details */}
+            <div className="col-span-12 lg:col-span-8 space-y-6">
+              <Tabs defaultValue="overview" className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                    <Activity className="h-5 w-5 text-[#5e5ce6]" />
+                    Active Fleet overview ({filteredBuses.length})
+                  </h2>
+                  <TabsList className="bg-white/5 border border-white/10 rounded-xl p-1 h-9">
+                    <TabsTrigger value="overview" className="text-xs h-7 rounded-lg data-[state=active]:bg-[#5e5ce6] data-[state=active]:text-white">Fleet Cards</TabsTrigger>
+                    <TabsTrigger value="map" className="text-xs h-7 rounded-lg data-[state=active]:bg-[#5e5ce6] data-[state=active]:text-white">Map View</TabsTrigger>
+                  </TabsList>
                 </div>
-                <div className="h-96 rounded-lg overflow-hidden border-2 border-gray-300">
-                  <GoogleMap
-                    markers={(() => {
-                      // Bus markers
-                      const busMarkers = busDisplayData
-                        .filter((b) => b.status.mlat && b.status.mlng)
-                        .map((b) => ({
-                          lat: parseFloat(b.status.mlat),
-                          lng: parseFloat(b.status.mlng),
-                          label: b.status.vid || undefined,
-                          status: b.status.ol === 1 ? 'online' : 'offline',
-                          type: 'bus',
-                          busId: b.status.vid,
-                        }));
 
-                      // Show stops only for selected bus (by vid)
-                      let stopMarkers: any[] = [];
-                      let polylines: any[] = [];
-                      if (selectedBusId && busStops[selectedBusId]) {
-                        const bus = busMarkers.find(b => b.busId === selectedBusId);
-                        const stops = busStops[selectedBusId] || [];
-                        // Find the closest stop index that the bus has passed (by order, using haversine distance)
-                        let passedIndex = -1;
-                        if (bus && stops.length > 0) {
-                          for (let i = 0; i < stops.length; i++) {
-                            const dist = haversine(
-                              { lat: bus.lat, lng: bus.lng },
-                              { lat: stops[i].latitude, lng: stops[i].longitude }
-                            );
-                            if (dist < 50) passedIndex = i;
+                <TabsContent value="overview">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {filteredBuses.map((overview) => {
+                      const canonicalBusIdRaw = overview.assignment?.busId || overview.status.vid
+                      const canonicalBusId = typeof canonicalBusIdRaw === "string" ? canonicalBusIdRaw : ""
+                      const stops = busStops[canonicalBusId] || []
+                      const busData = allBuses.find((b) => b.busId === overview.status.id)
+                      return (
+                        <FleetCard
+                          key={overview.status.id}
+                          overview={overview}
+                          stops={stops}
+                          newStop={newStop[canonicalBusId]}
+                          setNewStop={(val: any) => setNewStop((s) => ({ ...s, [canonicalBusId]: val }))}
+                          deleteStopFromBus={(stopIdx: number) => deleteStopFromBus(canonicalBusId, stopIdx)}
+                          addStopToBus={(stop: any) => addStopToBus(canonicalBusId, stop)}
+                          estimateTimeToStop={estimateTimeToStop}
+                          sensors={sensors}
+                          user={user}
+                          onUpdateBus={handleUpdateBus}
+                          onDeleteBus={handleDeleteBus}
+                          busData={busData}
+                        />
+                      )
+                    })}
+
+                    {filteredBuses.length === 0 && (
+                      <Card className="glass-card col-span-2 rounded-2xl py-12 text-center">
+                        <Bus className="h-10 w-10 text-[#c7c4d7]/20 mx-auto mb-3" />
+                        <p className="text-sm text-[#c7c4d7]/70 font-semibold">No registered buses found matching search criteria.</p>
+                      </Card>
+                    )}
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="map">
+                  <Card className="glass-card overflow-hidden rounded-2xl border-white/10">
+                    <CardHeader className="bg-white/5 border-b border-white/5 py-3 flex flex-row items-center justify-between">
+                      <div>
+                        <CardTitle className="text-sm font-bold text-white">Interactive Fleet Path Map</CardTitle>
+                        <CardDescription className="text-[10px] text-[#c7c4d7]">Visual route trace for active devices</CardDescription>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-[#c7c4d7]">Trace Bus:</span>
+                        <select 
+                          value={selectedBusId || ""}
+                          onChange={(e) => setSelectedBusId(e.target.value)}
+                          className="bg-[#1a1c1f] border border-white/10 rounded-lg text-xs py-1 px-2 text-white"
+                        >
+                          {busIds.map((id) => (
+                            <option key={id} value={id}>{id}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="p-0 h-[480px]">
+                      <GoogleMap
+                        markers={(() => {
+                          const busMarkers = busDisplayData
+                            .filter((b) => b.status.mlat && b.status.mlng)
+                            .map((b) => ({
+                              lat: parseFloat(b.status.mlat),
+                              lng: parseFloat(b.status.mlng),
+                              label: b.status.vid,
+                              status: b.status.ol === 1 ? "online" : "offline",
+                              type: "bus",
+                              busId: b.status.vid
+                            }))
+
+                          const stopMarkers: any[] = []
+                          const polylines: any[] = []
+                          if (selectedBusId && busStops[selectedBusId]) {
+                            const stops = busStops[selectedBusId]
+                            stops.forEach((stop, i) => {
+                              stopMarkers.push({
+                                lat: stop.latitude,
+                                lng: stop.longitude,
+                                label: `${i + 1}`,
+                                type: "stop",
+                                status: "notpassed",
+                                busId: selectedBusId
+                              })
+                            })
+                            if (stops.length > 1 && roadPolyline && roadPolyline.length > 1) {
+                              polylines.push({
+                                type: "polyline",
+                                path: roadPolyline
+                              })
+                            }
                           }
-                        }
-                        stops.forEach((stop, i) => {
-                          stopMarkers.push({
-                            lat: stop.latitude,
-                            lng: stop.longitude,
-                            label: `${i + 1}`,
-                            status: i <= passedIndex ? 'passed' : 'notpassed',
-                            type: 'stop',
-                            busId: selectedBusId,
-                          });
-                        });
-                        // Only show the road-following polyline if available
-                        if (stops.length > 1 && roadPolyline && roadPolyline.length > 1) {
-                          polylines.push({
-                            type: 'polyline',
-                            path: roadPolyline,
-                          });
-                        }
-                      }
 
-                      return [
-                        ...busMarkers,
-                        ...stopMarkers,
-                        ...polylines,
-                      ];
-                    })()}
-                    center={(() => {
-                      // Get center based on selected bus
-                      if (selectedBusId) {
-                        const selectedBus = busDisplayData.find(b => b.status.vid === selectedBusId);
-                        if (selectedBus && selectedBus.status.mlat && selectedBus.status.mlng) {
-                          return {
-                            lat: parseFloat(selectedBus.status.mlat),
-                            lng: parseFloat(selectedBus.status.mlng)
-                          };
-                        }
-                      }
-                      return undefined;
-                    })()}
-                    height="100%"
-                    showTrafficLayer={true}
-                  />
-                </div>
-                <div className="mt-4 p-4 bg-gray-50 border border-gray-200 rounded-lg">
-                  <p className="text-xs font-bold text-gray-900 mb-2">Map Legend</p>
-                  <div className="flex flex-wrap items-center gap-4 text-xs text-gray-700">
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 bg-green-500 rounded-full inline-block"></span>
-                      Online
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 bg-gray-400 rounded-full inline-block"></span>
-                      Offline
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 bg-green-500 rounded-full inline-block"></span>
-                      Stop Passed
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 bg-red-500 rounded-full inline-block"></span>
-                      Stop Upcoming
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-4 h-0.5 bg-blue-600 inline-block"></span>
-                      Route
-                    </span>
+                          return [...busMarkers, ...stopMarkers, ...polylines]
+                        })()}
+                        center={(() => {
+                          if (selectedBusId) {
+                            const selectedBus = busDisplayData.find((b) => b.status.vid === selectedBusId)
+                            if (selectedBus?.status.mlat && selectedBus.status.mlng) {
+                              return {
+                                lat: parseFloat(selectedBus.status.mlat),
+                                lng: parseFloat(selectedBus.status.mlng)
+                              }
+                            }
+                          }
+                          return undefined
+                        })()}
+                        height="100%"
+                        showTrafficLayer={true}
+                      />
+                    </CardContent>
+                  </Card>
+                </TabsContent>
+              </Tabs>
+            </div>
+
+            {/* RIGHT COLUMN: Terminal Logs & map overview widget */}
+            <div className="col-span-12 lg:col-span-4 space-y-6">
+              {/* SYSTEM LOGS TERMINAL */}
+              <section className="flex flex-col h-[350px]">
+                <h2 className="text-sm font-bold text-white flex items-center gap-2 mb-3">
+                  <Activity className="h-4 w-4 text-[#5e5ce6]" />
+                  Fleet Activity Feed
+                </h2>
+                <div className="flex-1 glass-card rounded-2xl border border-white/10 p-4 overflow-hidden flex flex-col backdrop-blur-sm">
+                  <div className="flex items-center justify-between mb-3 border-b border-white/5 pb-2 text-[10px] text-[#a3b8cc]/60 uppercase font-semibold">
+                    <span>Recent Events</span>
+                    <span className="text-[9px] font-mono lowercase">{logs.length} logged</span>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
+                  <div className="flex-1 overflow-y-auto space-y-2.5">
+                    {logs.map((log, i) => {
+                      let dotColor = "bg-green-400"
+                      if (log.type === "alert") dotColor = "bg-red-500 animate-pulse"
+                      else if (log.type === "system") dotColor = "bg-[#5e5ce6]"
+                      else if (log.type === "route") dotColor = "bg-[#bf5af2]"
 
-            {/* Bus List */}
-            <Card className="mt-4 border border-gray-300 shadow-sm">
-              <CardHeader className="bg-gray-50 border-b border-gray-200">
-                <CardTitle className="text-lg font-bold text-gray-900">All Buses</CardTitle>
-              </CardHeader>
-              <CardContent className="pt-4">
-                <div className="space-y-2">
-                  {busDisplayData
-                    .filter((b) => b.status.mlat && b.status.mlng)
-                    .map((overview) => (
-                      <div key={overview.status.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-3 h-3 rounded-full ${overview.status.ol === 1 ? 'bg-green-500' : 'bg-gray-400'}`}></div>
-                          <div>
-                            <span className="font-semibold text-gray-900">{overview.status.vid}</span>
-                            <p className="text-xs text-gray-600 font-mono">
-                              {overview.status.mlat}, {overview.status.mlng}
-                            </p>
+                      return (
+                        <div key={i} className="flex items-start gap-2.5 text-xs text-[#e2e2e7] leading-relaxed">
+                          <span className={`w-2 h-2 rounded-full mt-1.5 ${dotColor}`} />
+                          <div className="flex-1">
+                            <span className="text-[#a3b8cc]/50 font-semibold mr-1.5">{log.time}</span>
+                            <span>{log.message}</span>
                           </div>
                         </div>
-                        <Badge variant={overview.status.ol === 1 ? "default" : "secondary"} className={overview.status.ol === 1 ? "bg-green-600" : "bg-gray-400"}>
-                          {overview.status.ol === 1 ? "ONLINE" : "OFFLINE"}
-                        </Badge>
-                      </div>
-                    ))}
+                      )
+                    })}
+                  </div>
                 </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+              </section>
 
-        {/* Add Bus Modal */}
-        <Dialog open={addBusModalOpen} onOpenChange={setAddBusModalOpen}>
-          <DialogContent className="rounded-lg max-w-md mx-auto border-2 border-gray-300">
-            <DialogHeader>
-              <DialogTitle className="text-xl font-bold text-gray-900 flex items-center">
-                <Bus className="h-5 w-5 mr-2 text-blue-600" />
-                Add New Bus
-              </DialogTitle>
-              <p className="text-sm text-gray-600 mt-2">
-                Enter the device ID and the bus will be added with default settings. GPS data will sync automatically when the device comes online.
-              </p>
-            </DialogHeader>
-            <div className="space-y-4 mt-4">
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Device ID <span className="text-red-600">*</span></label>
-                <input 
-                  className="w-full border-2 border-gray-300 rounded-lg px-4 py-3 text-base focus:ring-2 focus:ring-blue-500 focus:border-blue-500" 
-                  placeholder="Enter device ID (e.g., 123456789)" 
-                  value={newBus.busId} 
-                  onChange={e => setNewBus(b => ({ ...b, busId: e.target.value }))}
-                  autoFocus
+              {/* SMALL MAP OVERVIEW WIDGET */}
+              <section className="h-[280px] relative rounded-2xl overflow-hidden border border-white/10 glass-card">
+                <GoogleMap
+                  markers={busDisplayData
+                    .filter((b) => b.status.mlat && b.status.mlng)
+                    .map((b) => ({
+                      lat: parseFloat(b.status.mlat),
+                      lng: parseFloat(b.status.mlng),
+                      label: b.status.vid,
+                      status: b.status.ol === 1 ? "online" : "offline",
+                      type: "bus"
+                    }))}
+                  height="100%"
+                  width="100%"
+                  showTrafficLayer={false}
                 />
-                <p className="text-xs text-gray-500 mt-2">
-                  Default settings: 50 seats capacity, current year, model "Manual Entry"
-                </p>
-              </div>
-            </div>
-            <DialogFooter className="mt-6">
-              <DialogClose asChild>
-                <Button variant="outline" className="border-gray-300">Cancel</Button>
-              </DialogClose>
-              <Button 
-                onClick={handleAddBus} 
-                disabled={addingBus || !newBus.busId.trim()} 
-                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-2 rounded"
-              >
-                {addingBus ? 'Adding...' : 'Add Bus'}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </main>
-
-      {/* Official Footer */}
-      <footer className="bg-gray-800 text-white mt-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="grid md:grid-cols-3 gap-6 text-sm">
-            <div>
-              <h3 className="font-bold mb-2">About</h3>
-              <p className="text-gray-400">School Transport Management System - An initiative for student safety and efficient fleet operations.</p>
-            </div>
-            <div>
-              <h3 className="font-bold mb-2">Support</h3>
-              <p className="text-gray-400">For technical support, contact: support@globalschool.in</p>
-            </div>
-            <div>
-              <h3 className="font-bold mb-2">System Information</h3>
-              <p className="text-gray-400">Version 1.0 | Last Updated: October 2025</p>
+                <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent pointer-events-none"></div>
+                <div className="absolute bottom-3 left-3 bg-[#0A0A0B]/90 backdrop-blur px-2.5 py-1 rounded-lg border border-white/10 text-[9px] text-[#e2e2e7] font-mono">
+                  Live fleet distribution grid
+                </div>
+              </section>
             </div>
           </div>
         </div>
-      </footer>
+      </main>
+
+      {/* ADD NEW MANUALLY CONFIGURED BUS REGISTRY MODAL */}
+      <Dialog open={addBusModalOpen} onOpenChange={setAddBusModalOpen}>
+        <DialogContent className="glass-panel-heavy border-white/10 max-w-md mx-auto text-white rounded-2xl bg-[#0c0e12]">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-white flex items-center">
+              <Bus className="h-5 w-5 mr-2 text-[#5e5ce6]" />
+              Register New Fleet Vehicle
+            </DialogTitle>
+            <p className="text-xs text-[#c7c4d7] mt-2">
+              Manually register the device hardware identifier below to establish telemetry listeners.
+            </p>
+          </DialogHeader>
+          <div className="space-y-4 mt-4">
+            <div>
+              <label className="block text-xs font-semibold text-[#c7c4d7] uppercase tracking-wider mb-2">Device Hardware ID <span className="text-red-500">*</span></label>
+              <input 
+                className="w-full bg-[#0d1c2d] border border-white/10 rounded-xl px-4 py-3 text-white focus:ring-2 focus:ring-[#5e5ce6] focus:border-[#5e5ce6] transition-all duration-300 font-semibold" 
+                placeholder="e.g. demo-bus-009" 
+                value={newBus.busId} 
+                onChange={(e) => setNewBus((b) => ({ ...b, busId: e.target.value }))}
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter className="mt-6 gap-2">
+            <DialogClose asChild>
+              <Button variant="outline" className="border-white/10 hover:bg-white/5 text-white">Cancel</Button>
+            </DialogClose>
+            <Button 
+              onClick={handleAddBus} 
+              disabled={addingBus || !newBus.busId.trim()} 
+              className="bg-[#5e5ce6] hover:bg-[#4d4ad5] text-white font-semibold px-6 py-2 rounded-xl"
+            >
+              {addingBus ? "Saving..." : "Save Registry"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

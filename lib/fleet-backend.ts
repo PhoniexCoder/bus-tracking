@@ -87,7 +87,8 @@ class FleetBackendService {
             const jsessionId = body.jsession as string
             this.currentSession = {
               jsessionId,
-              mode: "query", // use jsession as query param
+              mode: "query",
+              createdAt: new Date(),
               expiresAt: new Date(Date.now() + 60 * 60 * 1000),
             }
             console.log("Fleet authentication (GET) successful")
@@ -258,6 +259,29 @@ class FleetBackendService {
       did: device.dev_idno,
       type: device.device_type
     }));
+  }
+
+  getSessionInfo(): { expiresAt: Date; createdAt: Date } | null {
+    if (!this.currentSession) return null
+    return {
+      expiresAt: this.currentSession.expiresAt,
+      createdAt: this.currentSession.createdAt || new Date(),
+    }
+  }
+
+  async queryTrackDetail(devIdno: string, begintime: string, endtime: string): Promise<any> {
+    const response = await this.makeRequest("StandardApiAction_queryTrackDetail.action", {
+      devIdno,
+      begintime,
+      endtime,
+      selectMode: "1",
+      needAngle: "0",
+      needSpeed: "1",
+    })
+    if (response.result !== 0) {
+      throw new Error(this.getFleetApiErrorMessage(response.result, "queryTrackDetail"))
+    }
+    return response.tracks || []
   }
 
   async getUserVehicles(): Promise<Vehicle[]> {
