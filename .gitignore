@@ -54,3 +54,7 @@ backend/.env
 !pnpm-lock.yaml
 !components.json
 !next-env.d.ts
+
+# Python Virtual Environments
+.venv/
+backend/.venv/
