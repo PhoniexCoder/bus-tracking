@@ -112,7 +112,7 @@ export default function AdminDashboard() {
   const [selectedBusId, setSelectedBusId] = useState<string | null>(null)
   const [roadPolyline, setRoadPolyline] = useState<{ lat: number; lng: number }[] | null>(null)
   const [gpsAlert, setGpsAlert] = useState<string | null>(null)
-  const [logs, setLogs] = useState<{ time: string; message: string; type: "system" | "route" | "alert" | "info" }[]>([])
+  const [logs, setLogs] = useState<{ time: string; message: string; type: string }[]>([])
   const [students, setStudents] = useState<{ userId: string; profile: any }[]>([])
   const [selectedBusForStudent, setSelectedBusForStudent] = useState<Record<string, string>>({})
   const [studentFilter, setStudentFilter] = useState("")
@@ -162,7 +162,7 @@ export default function AdminDashboard() {
     })
   }, [busDisplayData])
 
-  const busIds = useMemo(() => uniqueBusDisplayData.map((b) => b.status.vid), [uniqueBusDisplayData])
+  const busIds = useMemo(() => uniqueBusDisplayData.map((b) => b.status.vid).filter((vid): vid is string => !!vid), [uniqueBusDisplayData])
 
   useEffect(() => {
     if (!selectedBusId && busIds.length > 0) setSelectedBusId(busIds[0])
@@ -734,7 +734,7 @@ export default function AdminDashboard() {
   // Filter Cards by search input
   const filteredBuses = useMemo(() => {
     return uniqueBusDisplayData.filter((b) => {
-      const canonicalBusId = b.assignment?.busId || b.status.vid
+      const canonicalBusId = b.assignment?.busId || b.status.vid || ""
       const plate = (b.plate_number || "").toLowerCase()
       const query = searchTerm.toLowerCase()
       return canonicalBusId.toLowerCase().includes(query) || plate.includes(query)
@@ -995,7 +995,7 @@ export default function AdminDashboard() {
                             .map((b) => ({
                               lat: parseFloat(b.status.mlat),
                               lng: parseFloat(b.status.mlng),
-                              label: b.status.vid,
+                              label: b.status.vid || undefined,
                               status: b.status.ol === 1 ? "online" : "offline",
                               type: "bus",
                               busId: b.status.vid
@@ -1178,7 +1178,7 @@ export default function AdminDashboard() {
                     .map((b) => ({
                       lat: parseFloat(b.status.mlat),
                       lng: parseFloat(b.status.mlng),
-                      label: b.status.vid,
+                      label: b.status.vid || undefined,
                       status: b.status.ol === 1 ? "online" : "offline",
                       type: "bus"
                     }))}
