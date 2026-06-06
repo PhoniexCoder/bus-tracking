@@ -4,7 +4,7 @@ A production-ready Progressive Web Application for real-time bus tracking with a
 
 ## Features
 
-- Real-time bus tracking using fleet.lagaam.in APIs
+- Real-time bus tracking using fleet.lagaam.in APIs.
 - ERP Single Sign-On (RS256 JWT via URL redirect)
 - Firebase Firestore for data storage
 - Google Maps integration with live bus markers
